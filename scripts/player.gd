@@ -338,8 +338,10 @@ func set_state(new_coins: int, new_health: float, new_kills: int, inv: Array, in
 func look(mouse_relative: Vector2) -> void:
 	if not GameState.running or cinematic_mode or not alive:
 		return
-	yaw -= mouse_relative.x * 0.0022
-	pitch -= mouse_relative.y * 0.0022
+	var sens := Settings.mouse_sensitivity
+	var dy := mouse_relative.y * (-1.0 if Settings.invert_y else 1.0)
+	yaw -= mouse_relative.x * 0.0022 * sens
+	pitch -= dy * 0.0022 * sens
 	pitch = clampf(pitch, -1.45, 1.45)
 
 func _update_camera() -> void:

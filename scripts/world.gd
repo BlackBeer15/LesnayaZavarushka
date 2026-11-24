@@ -14,6 +14,9 @@ var casino_center := Vector3.ZERO
 ## Деревья, камни и кусты рисуются MultiMesh-ами и не попадают в физику,
 ## поэтому для камеры киллкама храним упрощённые вертикальные цилиндры.
 var camera_occluders: Array = []
+var sun_light: DirectionalLight3D = null
+
+const SHADOW_DISTANCES := [0.0, 60.0, 110.0, 170.0]
 
 const SEGMENTS := 120
 
@@ -163,13 +166,22 @@ func _build_sky() -> void:
 	add_child(we)
 
 	var sun := DirectionalLight3D.new()
+	sun.name = "SunLight"
 	sun.light_energy = 1.35
 	sun.light_color = Color(1.0, 0.95, 0.82)
 	sun.rotation_degrees = Vector3(-52.0, -38.0, 0.0)
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 150.0
 	sun.shadow_bias = 0.04
 	add_child(sun)
+	sun_light = sun
+	apply_shadow_quality(Settings.shadow_quality)
+
+func apply_shadow_quality(quality: int) -> void:
+	if sun_light == null or not is_instance_valid(sun_light):
+		return
+	var q := clampi(quality, 0, SHADOW_DISTANCES.size() - 1)
+	sun_light.shadow_enabled = q > 0
+	sun_light.directional_shadow_max_distance = SHADOW_DISTANCES[q]
+	sun_light.shadow_blur = q >= 2
 
 func _build_terrain() -> void:
 	var st := SurfaceTool.new()

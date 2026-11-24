@@ -13,8 +13,10 @@ var world_ready := false
 var menu_layer: CanvasLayer = null
 var name_edit: LineEdit = null
 var ip_edit: LineEdit = null
+var settings_panel: Control = null
 var volume_slider: HSlider = null
 var volume_value_label: Label = null
+var sensitivity_value_label: Label = null
 var status_label: Label = null
 var server_list: Label = null
 
@@ -42,7 +44,7 @@ var debug_args: Array = []
 var debug_weapon_done := false
 
 func _ready() -> void:
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	Settings.apply_video() # окно/разрешение/VSync/MSAA по сохранённым настройкам
 	Net.main = self
 	Net.game_message.connect(_on_net_message)
 	Net.connected_as.connect(_on_connected_as)
@@ -122,26 +124,119 @@ func _build_menu() -> void:
 	join_btn.pressed.connect(_on_join_pressed)
 	panel.add_child(join_btn)
 
-	_label(panel, Vector2(50, 294), Vector2(190, 30), "Громкость звука:", Color.WHITE, 17)
-	volume_slider = HSlider.new()
-	volume_slider.position = Vector2(240, 297)
-	volume_slider.size = Vector2(390, 26)
-	volume_slider.min_value = 0.0
-	volume_slider.max_value = 100.0
-	volume_slider.step = 1.0
-	volume_slider.value = Settings.master_volume * 100.0
-	volume_slider.value_changed.connect(_on_volume_changed)
-	panel.add_child(volume_slider)
-	volume_value_label = _label(panel, Vector2(640, 294), Vector2(80, 30), "", Color(0.60, 1.0, 0.55), 17, true)
-	_update_volume_label(Settings.master_volume)
+	var settings_btn := Button.new()
+	settings_btn.text = "НАСТРОЙКИ"
+	settings_btn.position = Vector2(610, 18)
+	settings_btn.size = Vector2(150, 38)
+	settings_btn.add_theme_font_size_override("font_size", 17)
+	settings_btn.pressed.connect(_open_settings)
+	panel.add_child(settings_btn)
 
-	status_label = _label(panel, Vector2(50, 330), Vector2(670, 30), "", Color(1.0, 0.82, 0.30), 17)
-	server_list = _label(panel, Vector2(50, 364), Vector2(670, 68), "", Color(0.78, 0.90, 0.80), 16)
+	status_label = _label(panel, Vector2(50, 296), Vector2(670, 30), "", Color(1.0, 0.82, 0.30), 17)
+	server_list = _label(panel, Vector2(50, 334), Vector2(670, 92), "", Color(0.78, 0.90, 0.80), 16)
 
 	_label(panel, Vector2(50, 440), Vector2(670, 82),
 		"Управление: WASD — движение, мышь — обзор, ЛКМ — выстрел, R — перезарядка,\n"
 		+ "Пробел — прыжок, V — камера, E — казино, F — спин, 1-5 — оружие, Esc — меню",
 		Color(0.72, 0.78, 0.72), 15)
+	_build_settings_panel()
+
+func _build_settings_panel() -> void:
+	settings_panel = Control.new()
+	settings_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	settings_panel.position = Vector2(-300, -270)
+	settings_panel.size = Vector2(600, 540)
+	settings_panel.visible = false
+	menu_layer.add_child(settings_panel)
+	var bg := Panel.new()
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.08, 0.05, 0.98)
+	sb.border_color = Color(0.35, 0.70, 0.38)
+	sb.set_border_width_all(3)
+	sb.set_corner_radius_all(14)
+	bg.add_theme_stylebox_override("panel", sb)
+	settings_panel.add_child(bg)
+	_label(settings_panel, Vector2(0, 16), Vector2(600, 50), "НАСТРОЙКИ", Color(0.60, 1.0, 0.55), 32, true)
+
+	_label(settings_panel, Vector2(36, 84), Vector2(190, 28), "Громкость звука:", Color.WHITE, 17)
+	volume_slider = _make_slider(settings_panel, Vector2(232, 86), Vector2(260, 24), 0.0, 100.0, 1.0,
+		Settings.master_volume * 100.0, _on_volume_changed)
+	volume_value_label = _label(settings_panel, Vector2(505, 84), Vector2(60, 28), "", Color(0.60, 1.0, 0.55), 17, true)
+	_update_volume_label(Settings.master_volume)
+
+	_label(settings_panel, Vector2(36, 124), Vector2(190, 28), "Чувствительность:", Color.WHITE, 17)
+	var sens_slider := _make_slider(settings_panel, Vector2(232, 126), Vector2(260, 24), 10.0, 150.0, 5.0,
+		Settings.mouse_sensitivity * 50.0, _on_sensitivity_changed)
+	sensitivity_value_label = _label(settings_panel, Vector2(505, 124), Vector2(60, 28), "", Color(0.60, 1.0, 0.55), 17, true)
+	_on_sensitivity_changed(sens_slider.value)
+
+	_label(settings_panel, Vector2(36, 164), Vector2(190, 28), "Разрешение:", Color.WHITE, 17)
+	var res_opt := OptionButton.new()
+	res_opt.position = Vector2(232, 166)
+	res_opt.size = Vector2(260, 30)
+	for n in Settings.RESOLUTION_NAMES:
+		res_opt.add_item(n)
+	res_opt.selected = Settings.resolution_index
+	res_opt.item_selected.connect(_on_resolution_selected)
+	settings_panel.add_child(res_opt)
+
+	_add_check("Полный экран", 206, Settings.fullscreen, _on_fullscreen_toggled)
+	_add_check("Вертикальная синхронизация", 246, Settings.vsync, _on_vsync_toggled)
+	_add_check("Инверсия оси Y", 326, Settings.invert_y, _on_invert_y_toggled)
+
+	_label(settings_panel, Vector2(36, 286), Vector2(190, 28), "Тени:", Color.WHITE, 17)
+	var shadow_opt := OptionButton.new()
+	shadow_opt.position = Vector2(232, 288)
+	shadow_opt.size = Vector2(260, 30)
+	for n in Settings.SHADOW_NAMES:
+		shadow_opt.add_item(n)
+	shadow_opt.selected = Settings.shadow_quality
+	shadow_opt.item_selected.connect(_on_shadow_selected)
+	settings_panel.add_child(shadow_opt)
+
+	_label(settings_panel, Vector2(36, 366), Vector2(190, 28), "Сглаживание:", Color.WHITE, 17)
+	var msaa_opt := OptionButton.new()
+	msaa_opt.position = Vector2(232, 368)
+	msaa_opt.size = Vector2(260, 30)
+	for n in Settings.MSAA_NAMES:
+		msaa_opt.add_item(n)
+	msaa_opt.selected = Settings.msaa_index
+	msaa_opt.item_selected.connect(_on_msaa_selected)
+	settings_panel.add_child(msaa_opt)
+
+	_label(settings_panel, Vector2(36, 414), Vector2(530, 40),
+		"Настройки сохраняются автоматически и применяются сразу.", Color(0.70, 0.80, 0.70), 14)
+
+	var back_btn := Button.new()
+	back_btn.text = "НАЗАД"
+	back_btn.position = Vector2(190, 470)
+	back_btn.size = Vector2(220, 46)
+	back_btn.add_theme_font_size_override("font_size", 20)
+	back_btn.pressed.connect(_close_settings)
+	settings_panel.add_child(back_btn)
+
+func _add_check(text: String, y: int, pressed: bool, callback: Callable) -> void:
+	var chk := CheckButton.new()
+	chk.text = text
+	chk.position = Vector2(36, y)
+	chk.size = Vector2(460, 30)
+	chk.button_pressed = pressed
+	chk.toggled.connect(callback)
+	settings_panel.add_child(chk)
+
+func _make_slider(parent: Control, pos: Vector2, size: Vector2, min_v: float, max_v: float,
+		step: float, value: float, callback: Callable) -> HSlider:
+	var s := HSlider.new()
+	s.position = pos
+	s.size = size
+	s.min_value = min_v
+	s.max_value = max_v
+	s.step = step
+	s.value = value
+	s.value_changed.connect(callback)
+	parent.add_child(s)
+	return s
 
 func _label(parent: Control, pos: Vector2, size: Vector2, text: String, color: Color, fs: int, center: bool = false) -> Label:
 	var l := Label.new()
@@ -164,6 +259,38 @@ func _on_volume_changed(value: float) -> void:
 func _update_volume_label(fraction: float) -> void:
 	if volume_value_label != null:
 		volume_value_label.text = "%d%%" % roundi(fraction * 100.0)
+
+func _open_settings() -> void:
+	if settings_panel != null:
+		settings_panel.visible = true
+
+func _close_settings() -> void:
+	if settings_panel != null:
+		settings_panel.visible = false
+
+func _on_sensitivity_changed(value: float) -> void:
+	var sens := value / 50.0
+	Settings.set_sensitivity(sens)
+	if sensitivity_value_label != null:
+		sensitivity_value_label.text = "x%.1f" % sens
+
+func _on_resolution_selected(index: int) -> void:
+	Settings.set_resolution(index)
+
+func _on_fullscreen_toggled(value: bool) -> void:
+	Settings.set_fullscreen(value)
+
+func _on_vsync_toggled(value: bool) -> void:
+	Settings.set_vsync(value)
+
+func _on_shadow_selected(index: int) -> void:
+	Settings.set_shadow_quality(index)
+
+func _on_msaa_selected(index: int) -> void:
+	Settings.set_msaa(index)
+
+func _on_invert_y_toggled(value: bool) -> void:
+	Settings.set_invert_y(value)
 
 func _on_host_pressed() -> void:
 	var pname: String = name_edit.text.strip_edges()
@@ -705,6 +832,8 @@ func _input(event: InputEvent) -> void:
 
 func _toggle_menu() -> void:
 	menu_layer.visible = not menu_layer.visible
+	if not menu_layer.visible and settings_panel != null:
+		settings_panel.visible = false
 	if menu_layer.visible:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		GameState.running = false
