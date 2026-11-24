@@ -1,0 +1,13 @@
+# Портативный движок скачивается setup.ps1 / run.bat, в репозиторий не коммитится
+_engine/
+
+# Служебные файлы Godot
+.godot/
+*.log
+*.tmp
+
+# Мусор ОС / редакторов
+Thumbs.db
+.DS_Store
+__pycache__/
+*.pyc

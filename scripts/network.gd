@@ -1,0 +1,328 @@
+extends Node
+
+## LAN-мультиплеер через встроенный ENet. Хост авторитетен за мир, зверей,
+## монеты, урон и казино. Клиенты управляют своим игроком и получают снапшоты.
+
+const PORT := 7777
+
+signal connected_as(peer: int, seed_value: int)
+signal player_list_changed()
+signal game_message(text: String, color: Color)
+
+var main = null
+var local_peer := 0
+var is_host := false
+var local_name := "Охотник"
+var world_seed := 424242
+var players := {} # peer -> state dictionary
+
+func _ready() -> void:
+	pass
+
+func _new_state(peer: int, pname: String) -> Dictionary:
+	return {
+		"peer": peer,
+		"name": pname,
+		"pos": Vector3(-6.0 + float(peer % 3) * 6.0, 0.0, 13.0),
+		"yaw": 0.0,
+		"pitch": 0.0,
+		"coins": 30,
+		"health": 100.0,
+		"kills": 0,
+		"inventory": ["pistol", "", "", "", "", "", "", ""],
+		"weapon_index": 0,
+		"alive": true,
+	}
+
+func host_game(pname: String) -> bool:
+	local_name = pname
+	is_host = true
+	local_peer = 1
+	var peer := ENetMultiplayerPeer.new()
+	var err := peer.create_server(PORT, 8)
+	if err != OK:
+		game_message.emit("Не удалось открыть порт %d (код %d)" % [PORT, err], Color(1.0, 0.3, 0.3))
+		return false
+	multiplayer.multiplayer_peer = peer
+	_connect_signals()
+	players[1] = _new_state(1, pname)
+	connected_as.emit(1, world_seed)
+	player_list_changed.emit()
+	game_message.emit("Сервер запущен. Порт %d" % PORT, Color(0.6, 1.0, 0.6))
+	return true
+
+func join_game(ip: String, pname: String) -> bool:
+	local_name = pname
+	is_host = false
+	local_peer = 0
+	var peer := ENetMultiplayerPeer.new()
+	var err := peer.create_client(ip, PORT)
+	if err != OK:
+		game_message.emit("Не удалось подключиться (код %d)" % err, Color(1.0, 0.3, 0.3))
+		return false
+	multiplayer.multiplayer_peer = peer
+	_connect_signals()
+	game_message.emit("Подключаемся к %s:%d..." % [ip, PORT], Color(0.8, 0.9, 1.0))
+	return true
+
+func disconnect_game() -> void:
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+	multiplayer.multiplayer_peer = null
+	players.clear()
+	is_host = false
+	local_peer = 0
+
+func _connect_signals() -> void:
+	if not multiplayer.peer_connected.is_connected(_on_peer_connected):
+		multiplayer.peer_connected.connect(_on_peer_connected)
+	if not multiplayer.peer_disconnected.is_connected(_on_peer_disconnected):
+		multiplayer.peer_disconnected.connect(_on_peer_disconnected)
+	if not multiplayer.connected_to_server.is_connected(_on_connected_to_server):
+		multiplayer.connected_to_server.connect(_on_connected_to_server)
+	if not multiplayer.connection_failed.is_connected(_on_connection_failed):
+		multiplayer.connection_failed.connect(_on_connection_failed)
+	if not multiplayer.server_disconnected.is_connected(_on_server_disconnected):
+		multiplayer.server_disconnected.connect(_on_server_disconnected)
+
+func _on_connected_to_server() -> void:
+	rpc("register_player", local_name)
+
+func _on_connection_failed() -> void:
+	game_message.emit("Не удалось подключиться к серверу", Color(1.0, 0.3, 0.3))
+
+func _on_server_disconnected() -> void:
+	game_message.emit("Сервер отключился", Color(1.0, 0.3, 0.3))
+
+func _on_peer_connected(peer: int) -> void:
+	pass
+
+func _on_peer_disconnected(peer: int) -> void:
+	if is_host:
+		players.erase(peer)
+		rpc("player_left", peer)
+		player_list_changed.emit()
+		game_message.emit("Игрок %d отключился" % peer, Color(1.0, 0.75, 0.4))
+
+# ---------------------------------------------------------------- RPC ---
+
+@rpc("any_peer", "reliable")
+func register_player(pname: String) -> void:
+	if not is_host:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	players[sender] = _new_state(sender, pname)
+	rpc("welcome", sender, world_seed, pname)
+	player_list_changed.emit()
+	game_message.emit("%s вошёл в лес" % pname, Color(0.6, 1.0, 0.6))
+
+@rpc("reliable")
+func welcome(peer: int, seed_value: int, pname: String) -> void:
+	world_seed = seed_value
+	if not players.has(peer):
+		players[peer] = _new_state(peer, pname)
+	if not is_host and peer == multiplayer.get_unique_id():
+		local_peer = peer
+		connected_as.emit(peer, seed_value)
+	if main != null:
+		main.ensure_player(peer)
+	player_list_changed.emit()
+
+@rpc("reliable")
+func player_left(peer: int) -> void:
+	players.erase(peer)
+	if main != null:
+		main.remove_player(peer)
+	player_list_changed.emit()
+
+@rpc("any_peer", "unreliable")
+func report_transform(pos: Vector3, yaw: float, pitch: float) -> void:
+	if not is_host:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not players.has(sender):
+		return
+	players[sender]["pos"] = pos
+	players[sender]["yaw"] = yaw
+	players[sender]["pitch"] = pitch
+
+@rpc("unreliable")
+func snapshot_players(data: Array) -> void:
+	for e in data:
+		var peer := int(e[0])
+		if not players.has(peer):
+			players[peer] = _new_state(peer, "Охотник")
+		var st: Dictionary = players[peer]
+		st["pos"] = Vector3(float(e[1]), float(e[2]), float(e[3]))
+		st["yaw"] = float(e[4])
+		st["pitch"] = float(e[5])
+		if main != null and peer != multiplayer.get_unique_id():
+			main.update_remote_player(peer, st)
+
+@rpc("unreliable")
+func snapshot_animals(data: Array, frame: int, last_chunk: bool) -> void:
+	if main != null:
+		main.update_animal_proxies(data, frame, last_chunk)
+
+@rpc("any_peer", "call_local", "reliable")
+func request_shoot(origin: Vector3, dir: Vector3, weapon_id: String, muzzle: Vector3) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or main == null:
+		return
+	var result: Array = main.host_fire(sender, origin, dir, weapon_id, muzzle)
+	if result.is_empty():
+		return
+	rpc("shoot_result", sender, result[0], result[1], result[2], muzzle, result[3])
+
+@rpc("call_local", "reliable")
+func shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical: bool, muzzle: Vector3, damage: float) -> void:
+	if main != null:
+		main.on_shoot_result(shooter, hit_pos, animal_id, critical, muzzle, damage)
+
+@rpc("call_local", "reliable")
+func animal_died(animal_id: int, pos: Vector3, species: String, critical: bool, shooter: int, coin_value: int) -> void:
+	if main != null:
+		main.on_animal_died(animal_id, pos, species, critical, shooter, coin_value)
+
+@rpc("call_local", "reliable")
+func spawn_coins(coin_id: int, pos: Vector3, value: int) -> void:
+	if main != null:
+		main.on_spawn_coin(coin_id, pos, value)
+
+@rpc("any_peer", "call_local", "reliable")
+func coin_pickup_for(peer: int, coin_id: int, value: int) -> void:
+	if not is_host or not players.has(peer):
+		return
+	players[peer]["coins"] = int(players[peer]["coins"]) + value
+	rpc("coin_taken", coin_id, peer)
+	rpc("coins_update", peer, players[peer]["coins"])
+
+@rpc("call_local", "reliable")
+func coin_taken(coin_id: int, peer: int) -> void:
+	if main != null:
+		main.on_coin_taken(coin_id)
+
+@rpc("call_local", "reliable")
+func coins_update(peer: int, total: int) -> void:
+	if main != null:
+		main.on_coins_update(peer, total)
+
+@rpc("call_local", "reliable")
+func health_update(peer: int, health: float) -> void:
+	if main != null:
+		main.on_health_update(peer, health)
+
+@rpc("any_peer", "call_local", "reliable")
+func spin_request() -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(sender):
+		return
+	var st: Dictionary = players[sender]
+	if int(st["coins"]) < GameData.COIN_COST:
+		rpc("spin_result", sender, [], "Не хватает монет! Охотьтесь.", "", st["coins"], st["inventory"])
+		return
+	st["coins"] = int(st["coins"]) - GameData.COIN_COST
+	var reels: Array[int] = [
+		GameData.weight_to_rarity(randf()),
+		GameData.weight_to_rarity(randf()),
+		GameData.weight_to_rarity(randf()),
+	]
+	var text := "Мимо... утешительные 2 монеты"
+	var weapon_id := ""
+	if reels[0] == reels[1] and reels[1] == reels[2]:
+		var r := reels[0]
+		if r == 0:
+			st["coins"] = int(st["coins"]) + 50
+			text = "Тройка 7! +50 монет"
+		else:
+			weapon_id = GameData.weapon_for_rarity(r)
+			var inv: Array = st["inventory"]
+			if inv.has(weapon_id):
+				st["coins"] = int(st["coins"]) + 30 * (r + 1)
+				text = "Уже есть! +%d монет" % (30 * (r + 1))
+				weapon_id = ""
+			else:
+				var slot := -1
+				for i in range(inv.size()):
+					if inv[i] == "":
+						slot = i
+						break
+				if slot < 0:
+					st["coins"] = int(st["coins"]) + 30 * (r + 1)
+					text = "Инвентарь полон! +%d монет" % (30 * (r + 1))
+					weapon_id = ""
+				else:
+					inv[slot] = weapon_id
+					text = "ДЖЕКПОТ! %s" % GameData.WEAPONS[weapon_id]["name"]
+	else:
+		var pair := -1
+		if reels[0] == reels[1] or reels[0] == reels[2]:
+			pair = reels[0]
+		elif reels[1] == reels[2]:
+			pair = reels[1]
+		if pair >= 0:
+			var payout := 8 * (pair + 1)
+			st["coins"] = int(st["coins"]) + payout
+			text = "Два символа! +%d монет" % payout
+	rpc("spin_result", sender, reels, text, weapon_id, st["coins"], st["inventory"])
+
+@rpc("call_local", "reliable")
+func spin_result(peer: int, reels: Array, text: String, weapon_id: String, coins: int, inventory: Array) -> void:
+	if main != null:
+		main.on_spin_result(peer, reels, text, weapon_id, coins, inventory)
+
+@rpc("any_peer", "call_local", "reliable")
+func set_inventory_order(order: Array) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_local_pid()
+	if not is_host or not players.has(sender):
+		return
+	players[sender]["inventory"] = order
+	rpc("inventory_order", sender, order)
+
+@rpc("call_local", "reliable")
+func inventory_order(peer: int, order: Array) -> void:
+	if main != null:
+		main.on_inventory_order(peer, order)
+
+@rpc("any_peer", "reliable")
+func request_name_change(pname: String) -> void:
+	if not is_host:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if players.has(sender):
+		players[sender]["name"] = pname
+		rpc("name_changed", sender, pname)
+
+@rpc("call_local", "reliable")
+func name_changed(peer: int, pname: String) -> void:
+	if players.has(peer):
+		players[peer]["name"] = pname
+
+func broadcast_message(text: String, color: Color = Color.WHITE) -> void:
+	rpc("remote_message", text, color)
+
+@rpc("call_local", "reliable")
+func remote_message(text: String, color: Color) -> void:
+	game_message.emit(text, color)
+
+var _snapshot_frame := 0
+
+func snapshot_tick(player_arr: Array, animal_arr: Array) -> void:
+	if not is_host:
+		return
+	_snapshot_frame += 1
+	rpc("snapshot_players", player_arr)
+	var chunk_size := 12
+	var chunks: Array = []
+	for i in range(0, animal_arr.size(), chunk_size):
+		chunks.append(animal_arr.slice(i, i + chunk_size))
+	if chunks.is_empty():
+		chunks.append([])
+	for i in range(chunks.size()):
+		rpc("snapshot_animals", chunks[i], _snapshot_frame, i == chunks.size() - 1)
