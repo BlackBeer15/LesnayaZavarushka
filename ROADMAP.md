@@ -50,8 +50,8 @@
       языке. Переводы и переключатель языка не добавляются.
 - [x] **Логи и отчёты об ошибках.** Лог в `user://logs/game.log`, понятное окно
       с подсказкой при ошибках сети и запуска сервера.
-- [ ] **CI.** GitHub Actions: проверка GDScript через headless-запуск
-      (`--import`, `--quit-after`) и сборка Windows-артефакта на каждый тег.
+- [x] **CI.** GitHub Actions (`.github/workflows/ci.yml`): headless-импорт и
+      smoke-тест на каждый push/PR, сборка Windows-артефакта на тег `v*`.
 - [ ] **Версионирование.** Версия в `project.godot`, отображение в меню,
       отдельный `CHANGELOG.md`.
 

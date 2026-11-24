@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install portable Godot
+        shell: pwsh
+        run: .\setup.ps1
+
+      - name: Import project and compile scripts
+        shell: pwsh
+        run: |
+          & "./_engine/Godot_v4.7.2-stable_win64_console.exe" --headless --path . --editor --import --quit
+
+      - name: Headless smoke test
+        shell: pwsh
+        run: |
+          & "./_engine/Godot_v4.7.2-stable_win64_console.exe" --headless --path . --quit-after 180 -- --host --debug-state
+
+  export:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install portable Godot
+        shell: pwsh
+        run: .\setup.ps1
+
+      - name: Build Windows release
+        shell: pwsh
+        run: .\build_release.ps1
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LesnayaZavarushka-windows
+          path: build/windows/
+          if-no-files-found: error
