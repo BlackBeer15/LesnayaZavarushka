@@ -165,21 +165,39 @@ func snapshot_animals(data: Array, frame: int, last_chunk: bool) -> void:
 		main.update_animal_proxies(data, frame, last_chunk)
 
 @rpc("any_peer", "call_local", "reliable")
-func request_shoot(origin: Vector3, dir: Vector3, weapon_id: String, muzzle: Vector3) -> void:
+func request_shoot(origin: Vector3, dir: Vector3, weapon_id: String, muzzle: Vector3, ammo_type: int) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender == 0:
 		sender = multiplayer.get_unique_id()
 	if not is_host or main == null:
 		return
-	var result: Array = main.host_fire(sender, origin, dir, weapon_id, muzzle)
+	var result: Array = main.host_fire(sender, origin, dir, weapon_id, ammo_type)
 	if result.is_empty():
 		return
-	rpc("shoot_result", sender, result[0], result[1], result[2], muzzle, result[3])
+	rpc("shoot_result", sender, result[0], result[1], result[2], muzzle, result[3], result[4])
 
 @rpc("call_local", "reliable")
-func shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical: bool, muzzle: Vector3, damage: float) -> void:
+func shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical_type: String, muzzle: Vector3, damage: float, animal_name: String) -> void:
 	if main != null:
-		main.on_shoot_result(shooter, hit_pos, animal_id, critical, muzzle, damage)
+		main.on_shoot_result(shooter, hit_pos, animal_id, critical_type, muzzle, damage, animal_name)
+
+@rpc("any_peer", "call_local", "reliable")
+func make_noise(pos: Vector3, radius: float) -> void:
+	if not is_host:
+		return
+	for a in GameState.animals:
+		if a != null and is_instance_valid(a) and not a.remote_proxy:
+			a.hear_noise(pos, radius)
+
+@rpc("any_peer", "call_local", "reliable")
+func heal(peer: int, amount: float) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(peer):
+		return
+	players[peer]["health"] = minf(100.0, float(players[peer]["health"]) + amount)
+	rpc("health_update", peer, players[peer]["health"])
 
 @rpc("call_local", "reliable")
 func animal_died(animal_id: int, pos: Vector3, species: String, critical: bool, shooter: int, coin_value: int) -> void:

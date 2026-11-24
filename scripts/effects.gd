@@ -16,6 +16,18 @@ var chunks: Array[Chunk] = []
 var coins: Array = []
 var decals: Array = []
 var rings: Array = []
+var tweens: Array = []
+var decoys: Array = []
+var tracers: Array = []
+
+func _track(t: Tween) -> Tween:
+	tweens.append(t)
+	return t
+
+func _exit_tree() -> void:
+	for t in tweens:
+		if t != null and t.is_valid():
+			t.kill()
 
 var blood_mesh: SphereMesh
 var debris_mesh: BoxMesh
@@ -25,6 +37,9 @@ var blood_mat: StandardMaterial3D
 var gold_mat: StandardMaterial3D
 var bullet_mesh: SphereMesh
 var bullet_mat: StandardMaterial3D
+var casing_mesh: CylinderMesh
+var smoke_mat: StandardMaterial3D
+var brass_mat: StandardMaterial3D
 
 func _ready() -> void:
 	blood_mesh = SphereMesh.new()
@@ -49,6 +64,13 @@ func _ready() -> void:
 	bullet_mesh.radial_segments = 10
 	bullet_mesh.rings = 6
 	bullet_mat = _flat_mat(Color(1.0, 0.92, 0.55), 2.5)
+	casing_mesh = CylinderMesh.new()
+	casing_mesh.top_radius = 0.018
+	casing_mesh.bottom_radius = 0.018
+	casing_mesh.height = 0.055
+	casing_mesh.radial_segments = 8
+	smoke_mat = _flat_mat(Color(0.55, 0.56, 0.55), 0.0)
+	brass_mat = _flat_mat(Color(0.82, 0.62, 0.18), 0.15)
 
 func _flat_mat(color: Color, emission: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -65,6 +87,8 @@ func _process(delta: float) -> void:
 	_update_coins(delta)
 	_update_decals(delta)
 	_update_rings(delta)
+	_update_decoys(delta)
+	_update_tracers(delta)
 
 func _update_chunks(delta: float) -> void:
 	for i in range(chunks.size() - 1, -1, -1):
@@ -150,6 +174,37 @@ func _update_rings(delta: float) -> void:
 			node.queue_free()
 			rings.remove_at(i)
 
+func add_tracer(node: Node3D, life: float = 0.09) -> void:
+	add_child(node)
+	tracers.append({"node": node, "life": life})
+
+func _update_tracers(delta: float) -> void:
+	for i in range(tracers.size() - 1, -1, -1):
+		var e: Dictionary = tracers[i]
+		e["life"] = float(e["life"]) - delta
+		var node: Node3D = e["node"]
+		if float(e["life"]) <= 0.0:
+			if is_instance_valid(node):
+				node.queue_free()
+			tracers.remove_at(i)
+
+func add_decoy(node: Node3D, target: Vector3) -> void:
+	add_child(node)
+	decoys.append({"node": node, "target": target, "t": 0.0})
+
+func _update_decoys(delta: float) -> void:
+	for i in range(decoys.size() - 1, -1, -1):
+		var e: Dictionary = decoys[i]
+		var node: Node3D = e["node"]
+		if not is_instance_valid(node):
+			decoys.remove_at(i)
+			continue
+		e["t"] = float(e["t"]) + delta
+		node.position = node.position.lerp(e["target"], clampf(delta * 0.8, 0.0, 1.0))
+		if float(e["t"]) > 4.5:
+			node.queue_free()
+			decoys.remove_at(i)
+
 func _add_chunk(mesh: Mesh, mat: Material, pos: Vector3, vel: Vector3, max_life: float, scale: Vector3, bounce: bool = true) -> void:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -220,6 +275,50 @@ func spawn_decal(pos: Vector3, animal_scale: float) -> void:
 	mi.scale = Vector3(2.2 * animal_scale, 1.0, 1.8 * animal_scale)
 	add_child(mi)
 	decals.append({"node": mi, "life": 22.0})
+
+func spawn_damage_number(pos: Vector3, amount: int, crit_type: String) -> void:
+	var label := Label3D.new()
+	label.text = str(amount)
+	label.font_size = 42 if crit_type == "heart" else 32
+	label.outline_size = 7
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.position = pos + Vector3.UP * 0.35
+	label.modulate = Color(1.0, 0.25, 0.18) if crit_type == "heart" else (
+		Color(1.0, 0.85, 0.25) if crit_type != "" else Color.WHITE)
+	add_child(label)
+	var t := _track(create_tween())
+	t.tween_property(label, "position", label.position + Vector3.UP * 0.9, 0.75)
+	t.parallel().tween_property(label, "modulate:a", 0.0, 0.75)
+	t.tween_callback(label.queue_free)
+
+func spawn_muzzle_flash(pos: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	var sph := SphereMesh.new()
+	sph.radius = 0.11
+	sph.radial_segments = 8
+	sph.rings = 5
+	mi.mesh = sph
+	mi.material_override = bullet_mat
+	mi.position = pos
+	add_child(mi)
+	var t := _track(create_tween())
+	t.tween_property(mi, "scale", Vector3.ONE * 0.15, 0.09)
+	t.tween_callback(mi.queue_free)
+
+func spawn_smoke(pos: Vector3) -> void:
+	for _i in range(4):
+		_add_chunk(
+			blood_mesh, smoke_mat, pos,
+			Vector3(randf_range(-0.4, 0.4), randf_range(0.5, 1.2), randf_range(-0.2, 0.6)),
+			0.85, Vector3(randf_range(1.2, 2.2), randf_range(1.2, 2.2), randf_range(1.2, 2.2)), false
+		)
+
+func spawn_casing(pos: Vector3, right: Vector3) -> void:
+	_add_chunk(
+		casing_mesh, brass_mat, pos,
+		right * randf_range(1.2, 2.2) + Vector3.UP * randf_range(1.5, 2.8),
+		1.6, Vector3.ONE, true
+	)
 
 func spawn_hit(pos: Vector3, color: Color, count: int = 10, speed: float = 4.0) -> void:
 	var mat := _flat_mat(color, 1.0)

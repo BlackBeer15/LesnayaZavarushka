@@ -1,13 +1,29 @@
 extends Node
 
-## Процедурные звуки без внешних ассетов: генерируем PCM в памяти.
+## Звуки выстрелов берутся из MP3-файлов в корне проекта, остальное генерируется.
 
 const RATE := 22050
+const SHOT_FILES := {
+	"pistol": "res://Pistol.mp3",
+	"silver": "res://revolver.mp3",
+	"shotgun": "res://shotgun.mp3",
+	"sniper": "res://sniper.mp3",
+	"legend": "res://laser.mp3",
+}
 var streams := {}
 var voices: Array[AudioStreamPlayer] = []
 var voice_index := 0
 
 func _ready() -> void:
+	for weapon_id in SHOT_FILES.keys():
+		var stream := ResourceLoader.load(SHOT_FILES[weapon_id], "AudioStream")
+		if stream != null:
+			streams["shot_" + weapon_id] = stream
+	for _i in range(12):
+		var p := AudioStreamPlayer.new()
+		p.bus = "Master"
+		add_child(p)
+		voices.append(p)
 	streams["shot"] = _make_noise(0.16, 0.9, 220.0)
 	streams["crit"] = _make_boom(0.65)
 	streams["coin"] = _make_chirp(0.22, 760.0, 1480.0)
@@ -15,11 +31,8 @@ func _ready() -> void:
 	streams["spin"] = _make_chirp(0.10, 380.0, 560.0)
 	streams["hurt"] = _make_boom(0.28)
 	streams["ability"] = _make_chirp(0.42, 180.0, 640.0)
-	for _i in range(8):
-		var p := AudioStreamPlayer.new()
-		p.bus = "Master"
-		add_child(p)
-		voices.append(p)
+	if OS.get_cmdline_user_args().has("--debug-state"):
+		print("[SFX] streams=", streams.keys())
 
 func play(name: String, volume: float = 0.7) -> void:
 	if not streams.has(name) or voices.is_empty():
@@ -29,6 +42,12 @@ func play(name: String, volume: float = 0.7) -> void:
 	p.stream = streams[name]
 	p.volume_db = linear_to_db(clampf(volume, 0.001, 1.0))
 	p.play()
+
+func play_shot(weapon_id: String, volume: float = 0.8) -> void:
+	if streams.has("shot_" + weapon_id):
+		play("shot_" + weapon_id, volume)
+	else:
+		play("shot", volume)
 
 func _make_noise(duration: float, decay: float, tone: float) -> AudioStreamWAV:
 	var data := PackedByteArray()

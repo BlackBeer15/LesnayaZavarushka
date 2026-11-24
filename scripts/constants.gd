@@ -55,6 +55,21 @@ const WEAPONS := {
 
 const WEAPON_ORDER := ["pistol", "silver", "shotgun", "sniper", "legend"]
 
+## Вертикальный/горизонтальный разброс отдачи в градусах.
+const WEAPON_RECOIL := {
+	"pistol": Vector2(1.1, 0.35),
+	"silver": Vector2(1.5, 0.55),
+	"shotgun": Vector2(3.8, 1.1),
+	"sniper": Vector2(4.6, 1.4),
+	"legend": Vector2(0.55, 0.22),
+}
+
+const AMMO_TYPES := [
+	{"id": "normal", "name": "Обычные", "damage": 1.0, "pierce": false, "color": Color(0.85, 0.78, 0.45)},
+	{"id": "ap", "name": "Бронебойные", "damage": 1.35, "pierce": true, "color": Color(0.45, 0.75, 1.0)},
+	{"id": "hp", "name": "Экспансивные", "damage": 1.15, "pierce": false, "color": Color(1.0, 0.42, 0.35)},
+]
+
 ## Животные. weak_eye / weak_heart заданы в локальных координатах модели
 ## (модель смотрит в -Z, масштаб применён к корню зверя).
 const SPECIES := {

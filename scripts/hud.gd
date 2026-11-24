@@ -49,6 +49,10 @@ var coin_label: Label
 var weapon_label: Label
 var ammo_label: Label
 var message_label: Label
+var crosshair_label: Label
+var hit_marker_label: Label
+var stamina_fill: ColorRect
+var status_label: Label
 var damage_overlay: ColorRect
 var cinematic_bar_top: ColorRect
 var cinematic_bar_bottom: ColorRect
@@ -57,6 +61,7 @@ var minimap: Minimap
 
 var message_timer := 0.0
 var damage_alpha := 0.0
+var hit_marker_timer := 0.0
 
 func setup(p, casino_ui) -> void:
 	player = p
@@ -109,14 +114,37 @@ func setup(p, casino_ui) -> void:
 	minimap.player = p
 	root.add_child(minimap)
 
-	var cross := Label.new()
-	cross.text = "+"
-	cross.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	cross.position -= Vector2(9, 13)
-	cross.add_theme_font_size_override("font_size", 28)
-	cross.add_theme_color_override("font_color", Color(0.95, 0.98, 0.95, 0.85))
-	cross.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(cross)
+	crosshair_label = Label.new()
+	crosshair_label.text = "+"
+	crosshair_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	crosshair_label.position -= Vector2(9, 13)
+	crosshair_label.add_theme_font_size_override("font_size", 28)
+	crosshair_label.add_theme_color_override("font_color", Color(0.95, 0.98, 0.95, 0.85))
+	crosshair_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(crosshair_label)
+
+	hit_marker_label = Label.new()
+	hit_marker_label.text = "X"
+	hit_marker_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	hit_marker_label.position -= Vector2(10, 16)
+	hit_marker_label.add_theme_font_size_override("font_size", 34)
+	hit_marker_label.add_theme_color_override("font_color", Color.WHITE)
+	hit_marker_label.visible = false
+	hit_marker_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(hit_marker_label)
+
+	var stamina_bg := ColorRect.new()
+	stamina_bg.position = Vector2(12, 140)
+	stamina_bg.size = Vector2(260, 9)
+	stamina_bg.color = Color(0.08, 0.08, 0.09, 0.8)
+	root.add_child(stamina_bg)
+	stamina_fill = ColorRect.new()
+	stamina_fill.position = Vector2(12, 140)
+	stamina_fill.size = Vector2(260, 9)
+	stamina_fill.color = Color(0.30, 0.70, 0.95)
+	root.add_child(stamina_fill)
+
+	status_label = _make_label(root, Vector2(12, 154), Vector2(300, 24), "", Color(1.0, 0.5, 0.35), 15)
 
 	message_label = _make_label(root, Vector2(16, -46), Vector2(600, 30), "", Color.WHITE, 18)
 	message_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT, true)
@@ -194,7 +222,8 @@ func _process(delta: float) -> void:
 	coin_label.text = "МОНЕТЫ: %d   УБИЙСТВ: %d" % [player.coins, player.kills]
 	var w: Dictionary = GameData.WEAPONS[player.current_weapon_id()]
 	weapon_label.text = "Оружие: %s" % w["name"]
-	ammo_label.text = "%d / %d" % [player.ammo, int(w["mag"])]
+	var atype: Dictionary = GameData.AMMO_TYPES[player.ammo_type]
+	ammo_label.text = "%d / %d\n%s ×%d" % [player.ammo, int(w["mag"]), atype["name"], player.reserves[player.ammo_type]]
 	var rc: Color = GameData.RARITY_COLORS[int(w["rarity"])]
 	ammo_label.add_theme_color_override("font_color", rc)
 
@@ -206,6 +235,21 @@ func _process(delta: float) -> void:
 	if damage_alpha > 0.0:
 		damage_alpha = maxf(0.0, damage_alpha - delta * 1.4)
 		damage_overlay.color.a = damage_alpha
+	if hit_marker_timer > 0.0:
+		hit_marker_timer -= delta
+		if hit_marker_timer <= 0.0:
+			hit_marker_label.visible = false
+	crosshair_label.text = "." if player.aiming else "+"
+	crosshair_label.add_theme_font_size_override("font_size", 16 if player.aiming else 28)
+	stamina_fill.size.x = 260.0 * clampf(player.stamina / 100.0, 0.0, 1.0)
+	var status := ""
+	if player.bleeding > 0.0:
+		status = "КРОВОТЕЧЕНИЕ"
+	elif player.crouching:
+		status = "ПРИСЕД"
+	elif player.swimming:
+		status = "ПЛАВАНИЕ"
+	status_label.text = status
 	if inventory != null and inventory.is_open:
 		inventory.refresh()
 
@@ -214,6 +258,12 @@ func message(text: String, color: Color = Color.WHITE) -> void:
 	message_label.add_theme_color_override("font_color", color)
 	message_timer = 3.0
 	message_label.modulate.a = 1.0
+
+func hit_marker(critical: bool, heart: bool = false) -> void:
+	hit_marker_label.visible = true
+	hit_marker_label.text = "X"
+	hit_marker_label.add_theme_color_override("font_color", Color(1.0, 0.25, 0.18) if heart else (Color(1.0, 0.85, 0.25) if critical else Color.WHITE))
+	hit_marker_timer = 0.18
 
 func flash_damage() -> void:
 	damage_alpha = 0.42

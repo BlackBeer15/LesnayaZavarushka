@@ -25,6 +25,15 @@ var attack_cd := 0.0
 var think_cd := 0.0
 var wander_dir := Vector3.FORWARD
 
+var noise_pos := Vector3.ZERO
+var noise_timer := 0.0
+var blind_timer := 0.0
+var paralyze_timer := 0.0
+var pending_death_at := 0
+var pending_death_shooter := 0
+var weak_markers: Array[MeshInstance3D] = []
+var marker_mat: StandardMaterial3D = null
+
 var fur_mat: StandardMaterial3D
 var eye_mat: StandardMaterial3D
 var ability_label: Label3D
@@ -104,6 +113,44 @@ func _build_body() -> void:
 	ability_label.position = Vector3(0.0, 1.35, 0.0)
 	ability_label.visible = false
 	add_child(ability_label)
+	_build_weak_markers()
+
+func _build_weak_markers() -> void:
+	marker_mat = StandardMaterial3D.new()
+	marker_mat.albedo_color = Color(1.0, 0.25, 0.18)
+	marker_mat.emission_enabled = true
+	marker_mat.emission = Color(1.0, 0.2, 0.12)
+	marker_mat.emission_energy = 2.2
+	marker_mat.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+	var points: Array = data["weak_eyes"].duplicate()
+	points.append(data["weak_heart"])
+	points.append(Vector3(0.0, 0.30, 0.05)) # шея
+	for p in points:
+		var mi := MeshInstance3D.new()
+		var sph := SphereMesh.new()
+		sph.radial_segments = 8
+		sph.rings = 5
+		mi.mesh = sph
+		mi.position = p
+		mi.scale = Vector3.ONE * 0.055
+		mi.material_override = marker_mat
+		mi.visible = false
+		add_child(mi)
+		weak_markers.append(mi)
+
+func _update_weak_markers() -> void:
+	if weak_markers.is_empty() or GameState.main == null:
+		return
+	var lp = GameState.main.get_player_node(Net.local_peer)
+	if lp == null or not is_instance_valid(lp):
+		return
+	var dist := global_position.distance_to(lp.global_position)
+	var show: bool = dist < 16.0 and (bool(lp.aiming) or dist < 7.0)
+	for m in weak_markers:
+		if is_instance_valid(m):
+			m.visible = show
+			if show:
+				m.scale = Vector3.ONE * (0.045 + sin(Time.get_ticks_msec() * 0.008) * 0.012)
 
 func _add_sphere(n: String, pos: Vector3, size: Vector3, mat: Material) -> void:
 	var mi := MeshInstance3D.new()
@@ -145,18 +192,36 @@ func apply_remote(pos: Vector3, yaw: float, active: bool, _ability_index: int) -
 		return
 	position = pos
 	rotation.y = yaw
+	_update_weak_markers()
 	if active != ability_active:
 		_set_ability_visual(active)
 
+func hear_noise(pos: Vector3, radius: float) -> void:
+	if remote_proxy or dead:
+		return
+	if global_position.distance_squared_to(pos) > radius * radius:
+		return
+	noise_pos = pos
+	noise_timer = 4.0
+
+func _process(_delta: float) -> void:
+	if pending_death_at > 0 and Time.get_ticks_msec() >= pending_death_at and is_instance_valid(self):
+		pending_death_at = 0
+		perform_death(pending_death_shooter, true)
+
 func _physics_process(delta: float) -> void:
+	_update_weak_markers()
 	if remote_proxy or dead or not Net.is_host:
 		return
-	if frozen or not GameState.running:
+	if frozen or paralyze_timer > 0.0 or not GameState.running:
+		paralyze_timer = maxf(0.0, paralyze_timer - delta)
 		velocity = Vector3.ZERO
 		return
 	attack_cd -= delta
 	think_cd -= delta
 	ability_timer -= delta
+	noise_timer = maxf(0.0, noise_timer - delta)
+	blind_timer = maxf(0.0, blind_timer - delta)
 	if ability_timer <= 0.0:
 		_activate_ability()
 		ability_timer = randf_range(7.0, 15.0)
@@ -168,6 +233,11 @@ func _physics_process(delta: float) -> void:
 		_think()
 	var dir := Vector3.ZERO
 	var speed := float(data["speed"])
+	var interest := Vector3.ZERO
+	if noise_timer > 0.0 and global_position.distance_to(noise_pos) < 55.0:
+		interest = noise_pos
+	elif target != null:
+		interest = target.global_position
 	match state:
 		State.WANDER:
 			dir = wander_dir
@@ -175,18 +245,18 @@ func _physics_process(delta: float) -> void:
 			if randf() < 0.004:
 				wander_dir = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0)).normalized()
 		State.FLEE:
-			if target != null:
-				dir = (global_position - target.global_position).normalized()
+			if interest != Vector3.ZERO:
+				dir = (global_position - interest).normalized()
 				dir += Vector3(randf_range(-0.25, 0.25), 0.0, randf_range(-0.25, 0.25))
 				dir = dir.normalized()
 			speed *= 1.15
 		State.CHASE, State.CHARGE:
-			if target != null:
-				dir = target.global_position - global_position
+			if interest != Vector3.ZERO:
+				dir = interest - global_position
 				dir.y = 0.0
 				dir = dir.normalized()
 			speed *= 2.25 if state == State.CHARGE else 1.05
-			if target != null and global_position.distance_to(target.global_position) < 1.9 * scale.x and attack_cd <= 0.0:
+			if target != null and blind_timer <= 0.0 and global_position.distance_to(target.global_position) < 1.9 * scale.x and attack_cd <= 0.0:
 				_attack(target)
 	if ability_active:
 		match ability:
@@ -207,14 +277,20 @@ func _physics_process(delta: float) -> void:
 		rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 9.0, 0.0, 1.0))
 
 func _think() -> void:
-	if target == null:
+	var noise_near := noise_timer > 0.0 and global_position.distance_to(noise_pos) < 45.0
+	if bool(data["predator"]) and blind_timer > 0.0:
 		state = State.WANDER
 		return
+	if target == null:
+		state = State.CHASE if noise_near and bool(data["predator"]) else (State.FLEE if noise_near else State.WANDER)
+		return
 	var d := global_position.distance_to(target.global_position)
+	var noise_factor := 1.0 + clampf(float(target.noise_radius) / 30.0, 0.0, 2.0)
+	var detect := float(data["detect"]) * noise_factor
 	if bool(data["predator"]):
-		state = State.CHASE if d < float(data["detect"]) else State.WANDER
+		state = State.CHASE if (d < detect or noise_near) else State.WANDER
 	else:
-		state = State.FLEE if d < float(data["detect"]) else State.WANDER
+		state = State.FLEE if (d < detect or noise_near) else State.WANDER
 	if ability_active and ability == "charge" and state == State.CHASE:
 		state = State.CHARGE
 
@@ -256,40 +332,42 @@ func _set_ability_visual(active: bool) -> void:
 	ability_label.modulate = col
 	ability_label.visible = active
 
-func is_critical(hit_pos: Vector3) -> bool:
+## Возвращает тип уязвимой зоны: "eye", "heart", "spine" или пустую строку.
+func get_critical_type(hit_pos: Vector3, from_world: Vector3, dir_world: Vector3, pierce: bool = false) -> String:
 	var local := to_local(hit_pos)
-	for eye in data["weak_eyes"]:
-		if local.distance_to(eye) < 0.16:
-			return true
-	return local.distance_to(data["weak_heart"]) < 0.24
-
-## Пуля попадает в жизненно важную точку, если её траектория проходит рядом
-## с сердцем или глазом — даже если контакт произошёл с поверхностью туловища.
-func is_critical_ray(from_world: Vector3, dir_world: Vector3) -> bool:
 	var a := to_local(from_world)
 	var b := to_local(from_world + dir_world * 8.0)
 	for eye in data["weak_eyes"]:
-		if eye.distance_to(Geometry3D.get_closest_point_to_segment(eye, a, b)) < 0.15:
-			return true
+		if local.distance_to(eye) < 0.17 or eye.distance_to(Geometry3D.get_closest_point_to_segment(eye, a, b)) < 0.15:
+			return "eye"
 	var heart: Vector3 = data["weak_heart"]
-	return heart.distance_to(Geometry3D.get_closest_point_to_segment(heart, a, b)) < 0.23
+	if local.distance_to(heart) < 0.24 or heart.distance_to(Geometry3D.get_closest_point_to_segment(heart, a, b)) < 0.23:
+		return "heart"
+	var neck := Vector3(0.0, 0.30, 0.05)
+	if neck.distance_to(Geometry3D.get_closest_point_to_segment(neck, a, b)) < 0.13:
+		return "spine"
+	return ""
 
-func take_damage(amount: float, hit_pos: Vector3, shooter_peer: int, known_critical: bool = false) -> void:
+func take_damage(amount: float, hit_pos: Vector3, shooter_peer: int, crit_type: String = "", pierce: bool = false) -> void:
 	if dead or remote_proxy or not Net.is_host:
 		return
-	var critical := known_critical or is_critical(hit_pos)
-	if critical:
+	if crit_type == "heart":
 		hp = 0.0
 		dead = true
 		frozen = true
 		set_physics_process(false)
 		# Небольшая задержка, чтобы пуля долетела в слоу-мо до разрыва туши.
-		var timer := get_tree().create_timer(0.9, true, false, true)
-		timer.timeout.connect(func(): if is_instance_valid(self): perform_death(shooter_peer, critical))
+		pending_death_at = Time.get_ticks_msec() + 900
+		pending_death_shooter = shooter_peer
 		return
-	hp -= amount
+	if crit_type == "eye":
+		blind_timer = 5.0
+	elif crit_type == "spine":
+		paralyze_timer = 2.5
+	var mult := 1.0 if (pierce or not (ability_active and ability == "shield")) else 0.32
+	hp -= amount * mult
 	if hp <= 0.0:
-		perform_death(shooter_peer, false)
+		perform_death(shooter_peer, crit_type != "")
 
 func perform_death(shooter_peer: int, critical: bool) -> void:
 	if not is_instance_valid(self) or not Net.is_host:

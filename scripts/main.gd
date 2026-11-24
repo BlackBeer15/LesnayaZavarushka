@@ -199,6 +199,10 @@ func _build_scene(seed_value: int) -> void:
 	stage.add_child(effects)
 	GameState.effects = effects
 
+	var pickups := Pickups.new()
+	pickups.name = "Pickups"
+	stage.add_child(pickups)
+
 	hud = HUD.new()
 	hud.name = "HUD"
 	add_child(hud)
@@ -316,10 +320,11 @@ func _find_animal(aid: int):
 			return a
 	return null
 
-func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, _muzzle: Vector3) -> Array:
+func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, ammo_type: int) -> Array:
 	if not Net.is_host:
 		return []
 	var w: Dictionary = GameData.WEAPONS.get(weapon_id, GameData.WEAPONS["pistol"])
+	var ammo: Dictionary = GameData.AMMO_TYPES[clampi(ammo_type, 0, GameData.AMMO_TYPES.size() - 1)]
 	var to := origin + dir * 320.0
 	var query := PhysicsRayQueryParameters3D.create(origin, to)
 	var shooter = get_player_node(sender)
@@ -331,25 +336,36 @@ func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, _m
 		return []
 	var hit_pos: Vector3 = hit["position"]
 	var animal_id := -1
-	var critical := false
+	var crit_type := ""
 	var damage := 0.0
+	var animal_name := ""
 	var collider = hit["collider"]
 	if collider is Animal and not collider.remote_proxy:
 		animal_id = collider.animal_id
-		critical = collider.is_critical(hit_pos) or collider.is_critical_ray(origin, dir)
-		damage = float(w["damage"])
-		collider.take_damage(damage, hit_pos, sender, critical)
-	return [hit_pos, animal_id, critical, damage]
+		animal_name = collider.data["name"]
+		crit_type = collider.get_critical_type(hit_pos, origin, dir, bool(ammo["pierce"]))
+		damage = float(w["damage"]) * float(ammo["damage"])
+		if crit_type == "heart":
+			damage *= 3.0
+		elif crit_type != "":
+			damage *= 1.8
+		collider.take_damage(damage, hit_pos, sender, crit_type, bool(ammo["pierce"]))
+	return [hit_pos, animal_id, crit_type, damage, animal_name]
 
-func on_shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical: bool, muzzle: Vector3, damage: float) -> void:
+func on_shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical_type: String, muzzle: Vector3, damage: float, animal_name: String) -> void:
 	if debug_state:
-		print("[DBG] shot animal=%d crit=%s" % [animal_id, str(critical)])
+		print("[DBG] shot animal=%d crit=%s dmg=%.1f" % [animal_id, critical_type, damage])
 	if effects != null:
-		_spawn_tracer(muzzle, hit_pos, critical)
+		_spawn_tracer(muzzle, hit_pos, critical_type != "")
 		if animal_id < 0:
 			effects.spawn_hit(hit_pos, Color(0.75, 0.70, 0.55), 5, 2.0)
-	Sfx.play("shot", 0.6)
-	if critical and shooter == Net.local_peer:
+		else:
+			effects.spawn_damage_number(hit_pos, int(round(damage)), critical_type)
+			Sfx.play("hit", 0.45)
+	if shooter == Net.local_peer and hud != null:
+		hud.hit_marker(critical_type != "", critical_type == "heart")
+		shake(0.35 if critical_type == "heart" else 0.18)
+	if critical_type != "" and shooter == Net.local_peer:
 		_start_killcam(muzzle, hit_pos)
 
 func _spawn_tracer(from: Vector3, to: Vector3, critical: bool) -> void:
@@ -367,9 +383,7 @@ func _spawn_tracer(from: Vector3, to: Vector3, critical: bool) -> void:
 	mat.emission_energy = 1.5
 	mi.material_override = mat
 	mi.look_at_from_position((from + to) * 0.5, to)
-	effects.add_child(mi)
-	var timer := get_tree().create_timer(0.09, true, false, true)
-	timer.timeout.connect(func(): if is_instance_valid(mi): mi.queue_free())
+	effects.add_tracer(mi, 0.09)
 
 func on_animal_died(animal_id: int, pos: Vector3, species: String, critical: bool, shooter: int, coin_value: int) -> void:
 	if debug_state:
@@ -501,10 +515,13 @@ func _process(delta: float) -> void:
 		if test_spin_timer <= 0.0:
 			test_spin = false
 			Net.rpc("spin_request")
-	if test_fire and Net.is_host and camera != null:
+	if test_fire and camera != null:
 		test_fire_timer -= delta
 		if test_fire_timer <= 0.0:
 			test_fire_timer = 2.0
+			if not Net.is_host:
+				Net.rpc("request_shoot", camera.global_position, -camera.global_basis.z, "pistol", camera.global_position, 1)
+				return
 			var nearest = null
 			var best := 1.0e9
 			for a in GameState.animals:
@@ -518,7 +535,7 @@ func _process(delta: float) -> void:
 				var target: Vector3 = nearest.to_global(nearest.data["weak_heart"])
 				var origin: Vector3 = nearest.to_global(Vector3(0.0, 0.2, -2.5))
 				var dir := (target - origin).normalized()
-				Net.rpc("request_shoot", origin, dir, "sniper", origin)
+				Net.rpc("request_shoot", origin, dir, "sniper", origin, 0)
 	if Net.is_host:
 		snapshot_timer -= delta
 		if snapshot_timer <= 0.0:
@@ -597,6 +614,11 @@ func _end_killcam() -> void:
 		shooter.set_cinematic(false)
 	if hud != null:
 		hud.set_cinematic(false)
+
+func shake(amount: float) -> void:
+	var p = player_nodes.get(Net.local_peer, null)
+	if p != null and is_instance_valid(p):
+		p.add_shake(amount)
 
 func try_ability_sound(pos: Vector3) -> void:
 	var lp = player_nodes.get(Net.local_peer, null)

@@ -29,6 +29,31 @@ var ammo := 12
 var reloading := false
 var reload_timer := 0.0
 var fire_timer := 0.0
+var ammo_type := 0
+var reserves: Array[int] = [72, 24, 36]
+
+var aiming := false
+var crouching := false
+var swimming := false
+var stamina := 100.0
+var exhausted := false
+var bleeding := 0.0
+var last_bleed_sync := 0
+var noise_radius := 6.0
+var noise_boost := 0.0
+var shot_streak := 0
+var streak_timer := 0.0
+var aim_punch := Vector2.ZERO
+var shake_amount := 0.0
+
+var vm_slide: Node3D = null
+var vm_bolt: Node3D = null
+var vm_pump: Node3D = null
+var vm_mag: Node3D = null
+var vm_slide_z := 0.0
+var vm_bolt_z := 0.0
+var vm_pump_z := 0.0
+var vm_mag_y := 0.0
 
 var base_speed := 7.2
 var gravity := 24.0
@@ -73,7 +98,11 @@ func _setup_actions() -> void:
 	_add("move_left", KEY_A)
 	_add("move_right", KEY_D)
 	_add("fire", -1, MOUSE_BUTTON_LEFT)
+	_add("aim", -1, MOUSE_BUTTON_RIGHT)
 	_add("reload", KEY_R)
+	_add("sprint", KEY_SHIFT)
+	_add("crouch", KEY_CTRL)
+	_add("next_ammo", KEY_Q)
 	_add("interact", KEY_E)
 	_add("camera", KEY_V)
 	_add("jump", KEY_SPACE)
@@ -116,6 +145,35 @@ func _physics_process(delta: float) -> void:
 				_respawn()
 		return
 	invuln = maxf(0.0, invuln - delta)
+	noise_boost = maxf(0.0, noise_boost - delta)
+	streak_timer = maxf(0.0, streak_timer - delta)
+	if streak_timer <= 0.0:
+		shot_streak = 0
+	if bleeding > 0.0:
+		bleeding -= delta
+		health -= 2.2 * delta
+		if health <= 0.0:
+			take_damage(0.0, global_position)
+		elif int(Time.get_ticks_msec() / 500) != last_bleed_sync:
+			last_bleed_sync = int(Time.get_ticks_msec() / 500)
+			Net.rpc("health_update", peer, health)
+
+	# Плавание в озере
+	var lake_center := Vector2(-82.0, 74.0)
+	swimming = Vector2(global_position.x, global_position.z).distance_to(lake_center) < 21.0
+	if swimming:
+		var water_y: float = GameState.world.ground_height(lake_center.x, lake_center.y) - 0.30
+		global_position.y = lerpf(global_position.y, water_y, clampf(delta * 4.0, 0.0, 1.0))
+		velocity.y = 0.0
+
+	var want_sprint := Input.is_action_pressed(_action("sprint")) and not aiming and not crouching and not swimming
+	if want_sprint and (Input.get_action_strength(_action("move_fwd")) > 0.1 or velocity.length() > 1.0):
+		stamina = maxf(0.0, stamina - delta * 18.0)
+	else:
+		stamina = minf(100.0, stamina + delta * 12.0)
+	exhausted = stamina <= 0.5
+	if Input.is_action_just_pressed(_action("crouch")):
+		crouching = not crouching
 
 	var f := Input.get_action_strength(_action("move_fwd")) - Input.get_action_strength(_action("move_back"))
 	var r := Input.get_action_strength(_action("move_right")) - Input.get_action_strength(_action("move_left"))
@@ -124,12 +182,32 @@ func _physics_process(delta: float) -> void:
 	var move := forward * f + right * r
 	if move.length_squared() > 1.0:
 		move = move.normalized()
-	velocity.x = lerp(velocity.x, move.x * base_speed, clampf(delta * 14.0, 0.0, 1.0))
-	velocity.z = lerp(velocity.z, move.z * base_speed, clampf(delta * 14.0, 0.0, 1.0))
-	velocity.y -= gravity * delta
-	if is_on_floor() and Input.is_action_just_pressed(_action("jump")):
-		velocity.y = jump_speed
+	var speed := base_speed
+	if want_sprint and not exhausted:
+		speed *= 1.55
+	elif crouching:
+		speed *= 0.48
+	elif aiming:
+		speed *= 0.62
+	if swimming:
+		speed *= 0.65
+	velocity.x = lerp(velocity.x, move.x * speed, clampf(delta * 14.0, 0.0, 1.0))
+	velocity.z = lerp(velocity.z, move.z * speed, clampf(delta * 14.0, 0.0, 1.0))
+	if not swimming:
+		velocity.y -= gravity * delta
+		if is_on_floor() and Input.is_action_just_pressed(_action("jump")):
+			velocity.y = jump_speed
 	move_and_slide()
+
+	noise_radius = 5.0 + move.length() * 4.0
+	if want_sprint and velocity.length() > 1.0:
+		noise_radius = 20.0
+	elif crouching:
+		noise_radius = 2.0
+	elif aiming:
+		noise_radius = 4.0
+	if noise_boost > 0.0:
+		noise_radius = maxf(noise_radius, 38.0)
 
 	report_timer -= delta
 	if report_timer <= 0.0 and not Net.is_host:
@@ -141,6 +219,9 @@ func _process(delta: float) -> void:
 		return
 	if cinematic_mode:
 		return
+	aiming = Input.is_action_pressed(_action("aim")) and alive
+	aim_punch = aim_punch.lerp(Vector2.ZERO, clampf(delta * 8.0, 0.0, 1.0))
+	shake_amount = maxf(0.0, shake_amount - delta * 2.2)
 	_update_camera()
 	_update_weapon()
 	if not GameState.running or not alive:
@@ -162,6 +243,12 @@ func _process(delta: float) -> void:
 		_interact()
 	if Input.is_action_just_pressed(_action("reload")):
 		start_reload()
+	if Input.is_action_just_pressed(_action("next_ammo")):
+		ammo_type = (ammo_type + 1) % GameData.AMMO_TYPES.size()
+		reloading = false
+		ammo = int(GameData.WEAPONS[current_weapon_id()]["mag"])
+		if hud != null:
+			hud.message("Патроны: %s" % GameData.AMMO_TYPES[ammo_type]["name"], GameData.AMMO_TYPES[ammo_type]["color"])
 	if Input.is_action_just_pressed(_action("spin")):
 		Net.rpc("spin_request")
 	if Input.is_action_just_pressed(_action("inventory")) and hud != null and hud.inventory != null:
@@ -220,14 +307,23 @@ func look(mouse_relative: Vector2) -> void:
 func _update_camera() -> void:
 	if camera == null:
 		return
-	var eye := global_position + Vector3(0.0, 1.62, 0.0)
-	var fwd := Vector3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+	var eye_h := 1.05 if crouching else 1.62
+	var eye := global_position + Vector3(0.0, eye_h, 0.0)
+	var aim_pitch := pitch + aim_punch.y
+	var aim_yaw := yaw + aim_punch.x
+	var fwd := Vector3(-sin(aim_yaw) * cos(aim_pitch), sin(aim_pitch), -cos(aim_yaw) * cos(aim_pitch))
 	if third_person:
 		camera.global_position = eye - fwd * 4.2 + Vector3(0.0, 0.65, 0.0)
 		camera.look_at(eye + fwd * 12.0)
 	else:
 		camera.global_position = eye
-		camera.rotation = Vector3(pitch, yaw, 0.0)
+		camera.rotation = Vector3(aim_pitch, aim_yaw, 0.0)
+	if shake_amount > 0.0:
+		camera.global_position += Vector3(
+			randf_range(-1.0, 1.0), randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)
+		) * shake_amount * 0.06
+		camera.rotation.x += randf_range(-1.0, 1.0) * shake_amount * 0.025
+	camera.fov = lerpf(camera.fov, 42.0 if (aiming and not third_person) else 75.0, 0.25)
 
 func _toggle_camera() -> void:
 	third_person = not third_person
@@ -336,49 +432,101 @@ func _rebuild_weapon_model() -> void:
 	viewmodel.set_meta("muzzle", muzzle)
 	if muzzle_flash != null:
 		muzzle_flash.position = muzzle
+	vm_slide = model.find_child("Slide", true, false)
+	vm_bolt = model.find_child("BoltHandle", true, false)
+	vm_pump = model.find_child("Pump", true, false)
+	vm_mag = model.find_child("Magazine", true, false)
+	vm_slide_z = vm_slide.position.z if vm_slide != null else 0.0
+	vm_bolt_z = vm_bolt.position.z if vm_bolt != null else 0.0
+	vm_pump_z = vm_pump.position.z if vm_pump != null else 0.0
+	vm_mag_y = vm_mag.position.y if vm_mag != null else 0.0
 	_rebuild_third_person_weapon()
 
 func _update_weapon() -> void:
 	if viewmodel == null or not viewmodel.visible:
 		return
 	var bob := sin(Time.get_ticks_msec() * 0.009) * 0.008 * clampf(velocity.length() / 6.0, 0.0, 1.0)
-	viewmodel.position.y = -0.28 + bob
+	var ads_offset := -0.10 if aiming else 0.0
+	viewmodel.position.x = lerpf(viewmodel.position.x, 0.30 + ads_offset, 0.25)
+	viewmodel.position.y = -0.28 + bob - (0.035 if aiming else 0.0)
 	viewmodel.position.z = -0.62 + (flash_timer * 0.45 if flash_timer > 0.0 else 0.0)
 	viewmodel.rotation_degrees.x = -flash_timer * 55.0
 	viewmodel.rotation_degrees.z = sin(reload_timer * 9.0) * 18.0 if reloading else 0.0
+	var kick := clampf(flash_timer / 0.09, 0.0, 1.0)
+	if vm_slide != null:
+		vm_slide.position.z = vm_slide_z + kick * 0.08
+	if vm_bolt != null:
+		vm_bolt.position.z = vm_bolt_z + kick * 0.10
+	if vm_pump != null:
+		vm_pump.position.z = vm_pump_z + kick * 0.14
+	if vm_mag != null:
+		var drop := 0.0
+		if reloading:
+			var w: Dictionary = GameData.WEAPONS[current_weapon_id()]
+			var prog := 1.0 - clampf(reload_timer / float(w["reload"]), 0.0, 1.0)
+			drop = sin(prog * PI) * 0.22
+		vm_mag.position.y = vm_mag_y - drop
 
 func _shoot(w: Dictionary) -> void:
 	if ammo <= 0:
 		start_reload()
 		return
+	var wid := current_weapon_id()
 	var spread := float(w["spread"])
+	if aiming:
+		spread *= 0.35
+	spread *= 1.0 + float(shot_streak) * 0.12
+	if velocity.length() > 1.0:
+		spread *= 1.4
+	if crouching:
+		spread *= 0.7
 	var pellets := int(w["pellets"])
+	var muzzle := get_muzzle_position()
 	for _i in range(pellets):
 		var dir := (
 			-camera.global_basis.z
 			+ camera.global_basis.x * randf_range(-spread, spread)
 			+ camera.global_basis.y * randf_range(-spread, spread)
 		).normalized()
-		Net.rpc("request_shoot", camera.global_position, dir, current_weapon_id(), get_muzzle_position())
+		Net.rpc("request_shoot", camera.global_position, dir, wid, muzzle, ammo_type)
 	ammo -= 1
 	fire_timer = float(w["rate"])
 	flash_timer = 0.09
 	if muzzle_flash != null:
 		muzzle_flash.light_energy = 3.0
-	Sfx.play("shot", 0.65)
+	Sfx.play_shot(wid, 0.85)
+	var recoil: Vector2 = GameData.WEAPON_RECOIL.get(wid, Vector2(1.0, 0.3))
+	aim_punch.y += recoil.x * (0.55 if aiming else 1.0) * deg_to_rad(1.0)
+	aim_punch.x += randf_range(-recoil.y, recoil.y) * deg_to_rad(1.0)
+	shot_streak += 1
+	streak_timer = 0.45
+	noise_boost = 0.35
+	Net.rpc("make_noise", global_position, 42.0)
+	if GameState.effects != null:
+		GameState.effects.spawn_muzzle_flash(muzzle)
+		GameState.effects.spawn_smoke(muzzle)
+		GameState.effects.spawn_casing(camera.global_position + camera.global_basis.x * 0.25, camera.global_basis.x)
 
 func start_reload() -> void:
 	var w: Dictionary = GameData.WEAPONS[current_weapon_id()]
 	if reloading or ammo >= int(w["mag"]):
 		return
+	if reserves[ammo_type] <= 0:
+		if hud != null:
+			hud.message("Нет патронов этого типа!", Color(1.0, 0.4, 0.3))
+		return
 	reloading = true
 	reload_timer = float(w["reload"])
 	if hud != null:
-		hud.message("Перезарядка...")
+		hud.message("Перезарядка: %s" % GameData.AMMO_TYPES[ammo_type]["name"])
 
 func _finish_reload() -> void:
 	reloading = false
-	ammo = int(GameData.WEAPONS[current_weapon_id()]["mag"])
+	var w: Dictionary = GameData.WEAPONS[current_weapon_id()]
+	var need := int(w["mag"]) - ammo
+	var take := mini(need, reserves[ammo_type])
+	ammo += take
+	reserves[ammo_type] -= take
 
 func _interact() -> void:
 	if GameState.world == null or hud == null or hud.casino == null:
@@ -399,6 +547,9 @@ func take_damage(amount: float, from_pos: Vector3) -> void:
 		return
 	health -= amount
 	invuln = 0.45
+	if amount >= 4.0:
+		bleeding = 6.0
+	add_shake(0.5)
 	Net.rpc("health_update", peer, health)
 	if health <= 0.0:
 		health = 0.0
@@ -418,6 +569,28 @@ func _respawn() -> void:
 	Net.rpc("health_update", peer, health)
 	if hud != null:
 		hud.message("Вы вернулись в строй", Color(0.5, 1.0, 0.5))
+
+func add_shake(amount: float) -> void:
+	shake_amount = minf(1.2, shake_amount + amount)
+
+func collect_pickup(kind: String) -> void:
+	if not is_local:
+		return
+	match kind:
+		"medkit":
+			bleeding = 0.0
+			Net.rpc("heal", peer, 45.0)
+			if hud != null:
+				hud.message("Аптечка: +45 здоровья", Color(0.4, 1.0, 0.5))
+		"ammo_normal", "ammo_ap", "ammo_hp":
+			var idx := 0
+			if kind == "ammo_ap":
+				idx = 1
+			elif kind == "ammo_hp":
+				idx = 2
+			reserves[idx] += 18
+			if hud != null:
+				hud.message("%s: +18" % GameData.AMMO_TYPES[idx]["name"], GameData.AMMO_TYPES[idx]["color"])
 
 func rebuild_viewmodel() -> void:
 	if is_local:
