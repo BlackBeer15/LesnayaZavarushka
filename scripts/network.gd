@@ -41,7 +41,9 @@ func host_game(pname: String) -> bool:
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_server(PORT, 8)
 	if err != OK:
-		game_message.emit("Не удалось открыть порт %d (код %d)" % [PORT, err], Color(1.0, 0.3, 0.3))
+		var text := "Не удалось открыть порт %d (код %d). Возможно, он занят другой программой." % [PORT, err]
+		GameLog.show_error("Не удалось создать сервер", text)
+		game_message.emit(text, Color(1.0, 0.3, 0.3))
 		return false
 	multiplayer.multiplayer_peer = peer
 	_connect_signals()
@@ -58,7 +60,9 @@ func join_game(ip: String, pname: String) -> bool:
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(ip, PORT)
 	if err != OK:
-		game_message.emit("Не удалось подключиться (код %d)" % err, Color(1.0, 0.3, 0.3))
+		var text := "Не удалось подключиться к %s:%d (код %d). Проверьте IP и брандмауэр." % [ip, PORT, err]
+		GameLog.show_error("Ошибка подключения", text)
+		game_message.emit(text, Color(1.0, 0.3, 0.3))
 		return false
 	multiplayer.multiplayer_peer = peer
 	_connect_signals()
@@ -89,9 +93,13 @@ func _on_connected_to_server() -> void:
 	rpc("register_player", local_name)
 
 func _on_connection_failed() -> void:
+	GameLog.error("Не удалось подключиться к серверу")
+	GameLog.show_error("Ошибка подключения", "Сервер недоступен. Проверьте, что хост запустил игру и разрешил порт %d." % PORT)
 	game_message.emit("Не удалось подключиться к серверу", Color(1.0, 0.3, 0.3))
 
 func _on_server_disconnected() -> void:
+	GameLog.warn("Сервер отключился")
+	GameLog.show_error("Соединение потеряно", "Сервер отключился. Вернитесь в меню и подключитесь снова.")
 	game_message.emit("Сервер отключился", Color(1.0, 0.3, 0.3))
 
 func _on_peer_connected(peer: int) -> void:
@@ -118,6 +126,7 @@ func register_player(pname: String) -> void:
 		main.ensure_player(sender)
 	rpc("welcome", sender, world_seed, pname)
 	player_list_changed.emit()
+	GameLog.info("Игрок #%d (%s) вошёл в лес" % [sender, pname])
 	game_message.emit("%s вошёл в лес" % pname, Color(0.6, 1.0, 0.6))
 
 @rpc("reliable")
@@ -351,3 +360,4 @@ func snapshot_tick(player_arr: Array, animal_arr: Array) -> void:
 		chunks.append([])
 	for i in range(chunks.size()):
 		rpc("snapshot_animals", chunks[i], _snapshot_frame, i == chunks.size() - 1)
+

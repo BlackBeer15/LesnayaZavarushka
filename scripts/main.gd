@@ -317,6 +317,7 @@ func _on_connected_as(_peer: int, seed_value: int) -> void:
 func _begin_session(seed_value: int) -> void:
 	if world_ready:
 		return
+	GameLog.info("Начало сессии: peer=%d seed=%d хост=%s" % [Net.local_peer, seed_value, str(Net.is_host)])
 	world_ready = true
 	menu_layer.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -844,3 +845,4 @@ func _toggle_menu() -> void:
 			hud.update_mouse_mode()
 		else:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
