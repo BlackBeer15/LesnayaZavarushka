@@ -91,7 +91,8 @@ func _build_menu() -> void:
 	menu_layer.add_child(panel)
 
 	_label(panel, Vector2(0, 22), Vector2(780, 52), "ЛЕСНАЯ ЗАВАРУШКА", Color(0.60, 1.0, 0.55), 40, true)
-	_label(panel, Vector2(0, 72), Vector2(780, 30), "охота по локальной сети", Color(0.80, 0.86, 0.78), 20, true)
+	var version: String = ProjectSettings.get_setting("application/config/version", "0.0.0")
+	_label(panel, Vector2(0, 72), Vector2(780, 30), "охота по локальной сети  ·  v%s" % version, Color(0.80, 0.86, 0.78), 20, true)
 
 	_label(panel, Vector2(50, 122), Vector2(220, 30), "Ваше имя:", Color.WHITE, 17)
 	name_edit = LineEdit.new()
