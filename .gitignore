@@ -6,6 +6,9 @@ _engine/
 *.log
 *.tmp
 
+# Собранный релиз и установщик
+build/
+
 # Мусор ОС / редакторов
 Thumbs.db
 .DS_Store
