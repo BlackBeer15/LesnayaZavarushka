@@ -28,6 +28,18 @@ run.bat --host
 run.bat --join 192.168.1.10
 ```
 
+## Сборка релиза
+
+```
+powershell -ExecutionPolicy Bypass -File build_release.ps1
+```
+
+Скрипт сам скачает шаблоны экспорта Godot (≈1.3 ГБ, только при первой сборке),
+соберёт `build/windows/LesnayaZavarushka.exe` и, если установлен Inno Setup
+(`iscc` в PATH), сделает `build/LesnayaZavarushka_setup.exe`. Настройки сборки
+лежат в `export_presets.cfg` и `installer.iss`. Движок и шаблоны в репозиторий
+не попадают.
+
 ## Управление
 
 | Действие | Клавиша |
