@@ -37,6 +37,7 @@ var debug_look_done := false
 var test_inventory := false
 var test_inventory_timer := 6.0
 var debug_args: Array = []
+var debug_weapon_done := false
 
 func _ready() -> void:
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
@@ -452,6 +453,19 @@ func _process(delta: float) -> void:
 					str(p.is_on_floor()), GameState.animals.size(), p.coins])
 	if not world_ready:
 		return
+	if debug_args.has("--test-weapon") and not debug_weapon_done:
+		var lpw = player_nodes.get(Net.local_peer, null)
+		var widx := debug_args.find("--test-weapon")
+		if lpw != null and widx >= 0 and widx + 1 < debug_args.size():
+			var wid: String = debug_args[widx + 1]
+			if GameData.WEAPONS.has(wid):
+				if not lpw.inventory.has(wid):
+					for si in range(lpw.inventory.size()):
+						if lpw.inventory[si] == "":
+							lpw.inventory[si] = wid
+							break
+				lpw.equip(lpw.inventory.find(wid))
+				debug_weapon_done = true
 	if debug_look_down and not debug_look_done:
 		var lp0 = player_nodes.get(Net.local_peer, null)
 		if lp0 != null:

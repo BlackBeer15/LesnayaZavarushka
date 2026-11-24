@@ -282,7 +282,7 @@ func spawn_ring(pos: Vector3, color: Color) -> void:
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.75
 	torus.outer_radius = 1.0
-	torus.radial_segments = 26
+	torus.rings = 26
 	torus.ring_segments = 6
 	mi.mesh = torus
 	var mat := _flat_mat(color, 2.2)

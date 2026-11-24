@@ -35,6 +35,8 @@ var gravity := 24.0
 var jump_speed := 8.0
 
 var viewmodel: Node3D = null
+var tp_weapon_anchor: Node3D = null
+var tp_weapon: Node3D = null
 var body_model: Node3D = null
 var muzzle_flash: OmniLight3D = null
 var flash_timer := 0.0
@@ -258,6 +260,36 @@ func _build_body() -> void:
 	skin.albedo_color = Color(0.78, 0.61, 0.45)
 	head.material_override = skin
 	body_model.add_child(head)
+
+	for sx in [-1.0, 1.0]:
+		var leg := MeshInstance3D.new()
+		var leg_mesh := CapsuleMesh.new()
+		leg_mesh.radius = 0.12
+		leg_mesh.height = 0.72
+		leg.mesh = leg_mesh
+		leg.position = Vector3(0.16 * sx, 0.35, 0.0)
+		var pants := StandardMaterial3D.new()
+		pants.albedo_color = Color(0.16, 0.18, 0.14)
+		leg.material_override = pants
+		body_model.add_child(leg)
+		var boot := MeshInstance3D.new()
+		var boot_mesh := BoxMesh.new()
+		boot_mesh.size = Vector3(0.22, 0.12, 0.30)
+		boot.mesh = boot_mesh
+		boot.position = Vector3(0.16 * sx, 0.06, -0.06)
+		var boot_mat := StandardMaterial3D.new()
+		boot_mat.albedo_color = Color(0.09, 0.08, 0.07)
+		boot.material_override = boot_mat
+		body_model.add_child(boot)
+
+	tp_weapon_anchor = Node3D.new()
+	tp_weapon_anchor.name = "TPWeaponAnchor"
+	tp_weapon_anchor.position = Vector3(0.20, 1.18, -0.30)
+	tp_weapon_anchor.rotation_degrees = Vector3(-6.0, -8.0, 0.0)
+	tp_weapon_anchor.scale = Vector3(0.52, 0.52, 0.52)
+	body_model.add_child(tp_weapon_anchor)
+	_rebuild_third_person_weapon()
+
 	var name_tag := Label3D.new()
 	name_tag.text = player_name
 	name_tag.font_size = 40
@@ -265,6 +297,17 @@ func _build_body() -> void:
 	name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	name_tag.position = Vector3(0.0, 2.35, 0.0)
 	body_model.add_child(name_tag)
+
+func _sleeve_color() -> Color:
+	return Color(0.20, 0.34, 0.22) if peer % 2 == 1 else Color(0.24, 0.26, 0.48)
+
+func _rebuild_third_person_weapon() -> void:
+	if tp_weapon_anchor == null:
+		return
+	if tp_weapon != null and is_instance_valid(tp_weapon):
+		tp_weapon.queue_free()
+	tp_weapon = WeaponModels.build(current_weapon_id(), _sleeve_color())
+	tp_weapon_anchor.add_child(tp_weapon)
 
 func _build_viewmodel() -> void:
 	if camera == null:
@@ -287,52 +330,13 @@ func _rebuild_weapon_model() -> void:
 	for c in viewmodel.get_children():
 		if c != muzzle_flash:
 			c.queue_free()
-	if inventory.is_empty():
-		return
-	var w: Dictionary = GameData.WEAPONS[current_weapon_id()]
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = w["color"]
-	mat.metallic = 0.65
-	mat.roughness = 0.35
-	var rc: Color = GameData.RARITY_COLORS[int(w["rarity"])]
-	mat.emission_enabled = int(w["rarity"]) >= 2
-	mat.emission = rc
-	mat.emission_energy = 0.35
-	var body := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3(0.13, 0.15, 0.55)
-	body.mesh = box
-	body.position = Vector3(0.0, 0.0, -0.15)
-	body.material_override = mat
-	viewmodel.add_child(body)
-	var barrel := MeshInstance3D.new()
-	var b2 := BoxMesh.new()
-	b2.size = Vector3(0.07, 0.07, 0.42)
-	barrel.mesh = b2
-	barrel.position = Vector3(0.0, 0.02, -0.6)
-	barrel.material_override = mat
-	viewmodel.add_child(barrel)
-	var grip := MeshInstance3D.new()
-	var g := BoxMesh.new()
-	g.size = Vector3(0.09, 0.28, 0.11)
-	grip.mesh = g
-	grip.position = Vector3(0.0, -0.18, 0.07)
-	grip.rotation_degrees.x = -18.0
-	grip.material_override = mat
-	viewmodel.add_child(grip)
-	if int(w["rarity"]) >= 3:
-		var scope := MeshInstance3D.new()
-		var s := CylinderMesh.new()
-		s.top_radius = 0.045
-		s.bottom_radius = 0.045
-		s.height = 0.28
-		scope.mesh = s
-		scope.rotation_degrees.x = 90.0
-		scope.position = Vector3(0.0, 0.13, -0.25)
-		var sm := StandardMaterial3D.new()
-		sm.albedo_color = Color(0.05, 0.05, 0.06)
-		scope.material_override = sm
-		viewmodel.add_child(scope)
+	var model := WeaponModels.build(current_weapon_id(), _sleeve_color())
+	viewmodel.add_child(model)
+	var muzzle: Vector3 = model.get_meta("muzzle", Vector3(0.0, 0.0, -0.5))
+	viewmodel.set_meta("muzzle", muzzle)
+	if muzzle_flash != null:
+		muzzle_flash.position = muzzle
+	_rebuild_third_person_weapon()
 
 func _update_weapon() -> void:
 	if viewmodel == null or not viewmodel.visible:
@@ -340,6 +344,7 @@ func _update_weapon() -> void:
 	var bob := sin(Time.get_ticks_msec() * 0.009) * 0.008 * clampf(velocity.length() / 6.0, 0.0, 1.0)
 	viewmodel.position.y = -0.28 + bob
 	viewmodel.position.z = -0.62 + (flash_timer * 0.45 if flash_timer > 0.0 else 0.0)
+	viewmodel.rotation_degrees.x = -flash_timer * 55.0
 	viewmodel.rotation_degrees.z = sin(reload_timer * 9.0) * 18.0 if reloading else 0.0
 
 func _shoot(w: Dictionary) -> void:
@@ -438,6 +443,8 @@ func equip(index: int) -> void:
 func get_muzzle_position() -> Vector3:
 	if camera == null:
 		return global_position + Vector3.UP
+	if viewmodel != null and viewmodel.has_meta("muzzle"):
+		return viewmodel.to_global(viewmodel.get_meta("muzzle"))
 	return camera.to_global(Vector3(0.3, -0.22, -0.9))
 
 func set_cinematic(value: bool) -> void:
