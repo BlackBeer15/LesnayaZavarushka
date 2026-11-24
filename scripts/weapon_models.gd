@@ -86,6 +86,7 @@ static func _sphere(parent: Node, name: String, radius: float, pos: Vector3, mat
 	var mi := MeshInstance3D.new()
 	var m := SphereMesh.new()
 	m.radius = radius
+	m.height = radius * 2.0 # без этого маленькие сферы выглядят длинными иглами
 	m.radial_segments = 10
 	m.rings = 6
 	mi.mesh = m

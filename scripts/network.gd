@@ -29,7 +29,7 @@ func _new_state(peer: int, pname: String) -> Dictionary:
 		"coins": 30,
 		"health": 100.0,
 		"kills": 0,
-		"inventory": ["pistol", "", "", "", "", "", "", ""],
+		"inventory": GameData.starter_inventory(),
 		"weapon_index": 0,
 		"alive": true,
 	}
@@ -112,6 +112,10 @@ func register_player(pname: String) -> void:
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	players[sender] = _new_state(sender, pname)
+	# Клиенты создают узел игрока в welcome, а хост должен сделать это сам —
+	# иначе подключившегося игрока нет в сцене, хотя его состояние уже есть.
+	if main != null:
+		main.ensure_player(sender)
 	rpc("welcome", sender, world_seed, pname)
 	player_list_changed.emit()
 	game_message.emit("%s вошёл в лес" % pname, Color(0.6, 1.0, 0.6))
@@ -145,6 +149,9 @@ func report_transform(pos: Vector3, yaw: float, pitch: float) -> void:
 	players[sender]["pos"] = pos
 	players[sender]["yaw"] = yaw
 	players[sender]["pitch"] = pitch
+	# Хост не получает собственные снапшоты, поэтому применяет отчёт клиента сам.
+	if main != null:
+		main.update_remote_player(sender, players[sender])
 
 @rpc("unreliable")
 func snapshot_players(data: Array) -> void:

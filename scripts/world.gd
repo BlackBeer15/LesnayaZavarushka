@@ -11,6 +11,10 @@ var color_noise := FastNoiseLite.new()
 var slot_position := Vector3(0.0, 0.0, 10.5)
 var casino_center := Vector3.ZERO
 
+## Деревья, камни и кусты рисуются MultiMesh-ами и не попадают в физику,
+## поэтому для камеры киллкама храним упрощённые вертикальные цилиндры.
+var camera_occluders: Array = []
+
 const SEGMENTS := 120
 
 func build(seed_value: int) -> void:
@@ -47,6 +51,80 @@ func ground_height(x: float, z: float) -> float:
 	var flatten := 1.0 - smoothstep(9.0, GameData.CASINO_RADIUS, d)
 	h = lerp(h, 0.0, flatten)
 	return h
+
+## Первый параметр t (0..1) пересечения отрезка from->to с деревом, камнем,
+## кустом или рельефом. -1, если препятствий нет.
+func occluder_hit_t(from: Vector3, to: Vector3) -> float:
+	var min_x := minf(from.x, to.x) - 3.0
+	var max_x := maxf(from.x, to.x) + 3.0
+	var min_z := minf(from.z, to.z) - 3.0
+	var max_z := maxf(from.z, to.z) + 3.0
+	var best := 1.0
+	var found := false
+	for o in camera_occluders:
+		var center: Vector3 = o["center"]
+		if center.x < min_x or center.x > max_x or center.z < min_z or center.z > max_z:
+			continue
+		var t: float = _segment_cylinder_t(from, to, center, float(o["radius"]), float(o["height"]))
+		if t >= 0.0 and t < best:
+			best = t
+			found = true
+	# Пол: камера не должна уходить под рельеф, даже если рейкаст физики не сработал.
+	var steps := 10
+	for i in range(1, steps + 1):
+		var t := float(i) / float(steps)
+		var p := from.lerp(to, t)
+		if p.y < ground_height(p.x, p.z) + 0.35:
+			var safe_t := maxf(0.0, t - 1.0 / float(steps))
+			if safe_t < best:
+				best = safe_t
+				found = true
+			break
+	return best if found else -1.0
+
+func _segment_cylinder_t(from: Vector3, to: Vector3, center: Vector3, radius: float, height: float) -> float:
+	var d := to - from
+	var ox := from.x - center.x
+	var oz := from.z - center.z
+	var a := d.x * d.x + d.z * d.z
+	var c := ox * ox + oz * oz - radius * radius
+	var y_low := center.y - height * 0.5
+	var y_high := center.y + height * 0.5
+	if a < 0.000001:
+		if c > 0.0 or absf(d.y) < 0.000001:
+			return -1.0
+		var ty1 := (y_low - from.y) / d.y
+		var ty2 := (y_high - from.y) / d.y
+		if from.y >= y_low and from.y <= y_high:
+			var exit_t := ty2 if d.y > 0.0 else ty1
+			return exit_t if exit_t >= 0.0 and exit_t <= 1.0 else -1.0
+		var lo := minf(ty1, ty2)
+		var hi := maxf(ty1, ty2)
+		return clampf(lo, 0.0, 1.0) if hi >= 0.0 and lo <= 1.0 else -1.0
+	var b := 2.0 * (ox * d.x + oz * d.z)
+	var disc := b * b - 4.0 * a * c
+	if disc < 0.0:
+		return -1.0
+	var sq := sqrt(disc)
+	var t1 := (-b - sq) / (2.0 * a)
+	var t2 := (-b + sq) / (2.0 * a)
+	if t1 >= 0.0 and t1 <= 1.0:
+		var y1 := from.y + d.y * t1
+		if y1 >= y_low and y1 <= y_high:
+			return t1
+	if t2 >= 0.0 and t2 <= 1.0:
+		var y2 := from.y + d.y * t2
+		if y2 >= y_low and y2 <= y_high:
+			return t2
+	# Пуля может лететь внутри кроны: ищем выход через верх или низ цилиндра.
+	if c < 0.0 and from.y >= y_low and from.y <= y_high:
+		if d.y > 0.0 and to.y > y_high:
+			var up_t := (y_high - from.y) / d.y
+			return up_t if up_t <= 1.0 else -1.0
+		if d.y < 0.0 and to.y < y_low:
+			var down_t := (y_low - from.y) / d.y
+			return down_t if down_t <= 1.0 else -1.0
+	return -1.0
 
 func biome_at(x: float, z: float) -> int:
 	if Vector2(x, z).length() < GameData.CASINO_RADIUS + 2.0:
@@ -218,6 +296,12 @@ func _build_forest() -> void:
 		else:
 			light_t.append(fpos)
 		foliage_rot.append(rng.randf_range(0.0, TAU))
+		# Ствол вместе с кроной: снизу верхнего конуса и до его вершины.
+		camera_occluders.append({
+			"center": Vector3(x, h + 2.1 * s, z),
+			"radius": 0.95 * s,
+			"height": 4.4 * s,
+		})
 
 	var trunk_mesh := CylinderMesh.new()
 	trunk_mesh.radial_segments = 6
@@ -278,7 +362,13 @@ func _build_rocks() -> void:
 		positions.append(Vector3(x, ground_height(x, z) + 0.25 * s, z))
 		rots.append(rng.randf_range(0.0, TAU))
 		scales.append(s)
+		camera_occluders.append({
+			"center": Vector3(x, ground_height(x, z) + 0.25 * s, z),
+			"radius": 1.05 * s,
+			"height": 0.7 * s,
+		})
 	var sphere := SphereMesh.new()
+	sphere.height = 2.0
 	sphere.radial_segments = 6
 	sphere.rings = 4
 	var mat := StandardMaterial3D.new()
@@ -313,7 +403,13 @@ func _build_bushes() -> void:
 		positions.append(Vector3(x, ground_height(x, z) + 0.25 * s, z))
 		rots.append(rng.randf_range(0.0, TAU))
 		scales.append(s)
+		camera_occluders.append({
+			"center": Vector3(x, ground_height(x, z) + 0.25 * s, z),
+			"radius": 0.85 * s,
+			"height": 0.6 * s,
+		})
 	var sphere := SphereMesh.new()
+	sphere.height = 2.0
 	sphere.radial_segments = 5
 	sphere.rings = 3
 	var mat := StandardMaterial3D.new()

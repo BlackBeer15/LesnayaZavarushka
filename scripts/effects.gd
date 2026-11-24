@@ -44,6 +44,7 @@ var brass_mat: StandardMaterial3D
 func _ready() -> void:
 	blood_mesh = SphereMesh.new()
 	blood_mesh.radius = 0.085
+	blood_mesh.height = 0.17
 	blood_mesh.radial_segments = 6
 	blood_mesh.rings = 4
 	debris_mesh = BoxMesh.new()
@@ -61,6 +62,7 @@ func _ready() -> void:
 	gold_mat.metallic = 0.7
 	bullet_mesh = SphereMesh.new()
 	bullet_mesh.radius = 0.20
+	bullet_mesh.height = 0.40
 	bullet_mesh.radial_segments = 10
 	bullet_mesh.rings = 6
 	bullet_mat = _flat_mat(Color(1.0, 0.92, 0.55), 2.5)
@@ -295,6 +297,7 @@ func spawn_muzzle_flash(pos: Vector3) -> void:
 	var mi := MeshInstance3D.new()
 	var sph := SphereMesh.new()
 	sph.radius = 0.11
+	sph.height = 0.22
 	sph.radial_segments = 8
 	sph.rings = 5
 	mi.mesh = sph

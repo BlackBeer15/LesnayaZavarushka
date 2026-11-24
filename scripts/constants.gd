@@ -149,3 +149,12 @@ static func weapon_for_rarity(rarity: int) -> String:
 		if WEAPONS[id]["rarity"] == rarity:
 			return id
 	return "pistol"
+
+## Временный набор для разработки: всё оружие доступно сразу.
+static func starter_inventory() -> Array:
+	var inv: Array = []
+	for id in WEAPON_ORDER:
+		inv.append(id)
+	while inv.size() < 8:
+		inv.append("")
+	return inv

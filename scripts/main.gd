@@ -13,6 +13,8 @@ var world_ready := false
 var menu_layer: CanvasLayer = null
 var name_edit: LineEdit = null
 var ip_edit: LineEdit = null
+var volume_slider: HSlider = null
+var volume_value_label: Label = null
 var status_label: Label = null
 var server_list: Label = null
 
@@ -119,8 +121,21 @@ func _build_menu() -> void:
 	join_btn.pressed.connect(_on_join_pressed)
 	panel.add_child(join_btn)
 
-	status_label = _label(panel, Vector2(50, 296), Vector2(670, 30), "", Color(1.0, 0.82, 0.30), 17)
-	server_list = _label(panel, Vector2(50, 334), Vector2(670, 92), "", Color(0.78, 0.90, 0.80), 16)
+	_label(panel, Vector2(50, 294), Vector2(190, 30), "Громкость звука:", Color.WHITE, 17)
+	volume_slider = HSlider.new()
+	volume_slider.position = Vector2(240, 297)
+	volume_slider.size = Vector2(390, 26)
+	volume_slider.min_value = 0.0
+	volume_slider.max_value = 100.0
+	volume_slider.step = 1.0
+	volume_slider.value = Settings.master_volume * 100.0
+	volume_slider.value_changed.connect(_on_volume_changed)
+	panel.add_child(volume_slider)
+	volume_value_label = _label(panel, Vector2(640, 294), Vector2(80, 30), "", Color(0.60, 1.0, 0.55), 17, true)
+	_update_volume_label(Settings.master_volume)
+
+	status_label = _label(panel, Vector2(50, 330), Vector2(670, 30), "", Color(1.0, 0.82, 0.30), 17)
+	server_list = _label(panel, Vector2(50, 364), Vector2(670, 68), "", Color(0.78, 0.90, 0.80), 16)
 
 	_label(panel, Vector2(50, 440), Vector2(670, 82),
 		"Управление: WASD — движение, мышь — обзор, ЛКМ — выстрел, R — перезарядка,\n"
@@ -139,6 +154,15 @@ func _label(parent: Control, pos: Vector2, size: Vector2, text: String, color: C
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(l)
 	return l
+
+func _on_volume_changed(value: float) -> void:
+	var fraction := value / 100.0
+	Settings.set_master_volume(fraction)
+	_update_volume_label(fraction)
+
+func _update_volume_label(fraction: float) -> void:
+	if volume_value_label != null:
+		volume_value_label.text = "%d%%" % roundi(fraction * 100.0)
 
 func _on_host_pressed() -> void:
 	var pname: String = name_edit.text.strip_edges()
@@ -246,6 +270,8 @@ func ensure_player(peer: int) -> void:
 	stage.add_child(p)
 	player_nodes[peer] = p
 	GameState.players.append(p)
+	if debug_state:
+		print("[DBG] player node peer=%d local=%s name=%s" % [peer, str(is_local), pname])
 	if is_local:
 		hud.player = p
 		hud.minimap.player = p
@@ -462,9 +488,9 @@ func _process(delta: float) -> void:
 			var p = player_nodes.get(Net.local_peer, null)
 			if p != null:
 
-				print("[DBG] player=%s ground=%.2f floor=%s animals=%d coins=%d" % [
+				print("[DBG] player=%s ground=%.2f floor=%s animals=%d coins=%d nodes=%d inv=%s" % [
 					str(p.global_position), world.ground_height(p.global_position.x, p.global_position.z),
-					str(p.is_on_floor()), GameState.animals.size(), p.coins])
+					str(p.is_on_floor()), GameState.animals.size(), p.coins, player_nodes.size(), str(p.inventory)])
 	if not world_ready:
 		return
 	if debug_args.has("--test-weapon") and not debug_weapon_done:
@@ -552,6 +578,12 @@ func _send_snapshots() -> void:
 		var p = player_nodes[peer]
 		if not is_instance_valid(p):
 			continue
+		# Состояние хоста тоже должно быть актуальным (например, для списка игроков).
+		var st: Dictionary = Net.players.get(peer, {})
+		if not st.is_empty():
+			st["pos"] = p.global_position
+			st["yaw"] = p.yaw
+			st["pitch"] = p.pitch
 		pdata.append([peer, p.global_position.x, p.global_position.y, p.global_position.z, p.yaw, p.pitch])
 	var adata := []
 	for a in GameState.animals:
@@ -595,11 +627,37 @@ func _update_killcam() -> void:
 		var cam_up := right.cross(dir).normalized()
 		var angle := f * TAU * 0.95
 		var offset := right * cos(angle) * 2.3 + cam_up * sin(angle) * 1.5 - dir * 0.9
-		camera.global_position = bullet_pos + offset
-		camera.look_at(bullet_pos.lerp(hit, 0.4))
+		var desired := bullet_pos + offset
+		camera.global_position = _safe_cinematic_camera(bullet_pos, desired)
+		camera.look_at(bullet_pos + dir * maxf(1.0, bullet_pos.distance_to(hit) * 0.4), cam_up)
 		camera.fov = lerpf(75.0, 34.0, f)
 	elif t > 1.9:
 		_end_killcam()
+
+## Не даём орбитальной камере зайти внутрь геометрии: стены и рельеф проверяем
+## рейкастом по физике, деревья/камни/кусты — упрощёнными преградами мира.
+func _safe_cinematic_camera(from: Vector3, desired: Vector3) -> Vector3:
+	var delta := desired - from
+	var dist := delta.length()
+	if dist < 0.001:
+		return desired
+	var dir := delta / dist
+	var allowed := dist
+	if stage != null and stage.get_world_3d() != null:
+		var query := PhysicsRayQueryParameters3D.create(from, desired)
+		query.collision_mask = 1 # только статичный мир, не звери
+		var shooter = player_nodes.get(Net.local_peer, null)
+		if shooter != null and is_instance_valid(shooter):
+			query.exclude = [shooter.get_rid()]
+		var hit := stage.get_world_3d().direct_space_state.intersect_ray(query)
+		if not hit.is_empty():
+			allowed = minf(allowed, maxf(0.0, from.distance_to(hit["position"]) - 0.3))
+	if world != null and world.has_method("occluder_hit_t"):
+		var hit_t: float = world.occluder_hit_t(from, desired)
+		if hit_t >= 0.0:
+			allowed = minf(allowed, maxf(0.0, hit_t * dist - 0.25))
+	allowed = maxf(allowed, 0.35) # камера не должна оказаться внутри пули
+	return from + dir * allowed
 
 func _end_killcam() -> void:
 	cinematic = false

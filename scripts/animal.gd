@@ -128,6 +128,7 @@ func _build_weak_markers() -> void:
 	for p in points:
 		var mi := MeshInstance3D.new()
 		var sph := SphereMesh.new()
+		sph.height = 2.0
 		sph.radial_segments = 8
 		sph.rings = 5
 		mi.mesh = sph
@@ -156,6 +157,7 @@ func _add_sphere(n: String, pos: Vector3, size: Vector3, mat: Material) -> void:
 	var mi := MeshInstance3D.new()
 	mi.name = n
 	var sph := SphereMesh.new()
+	sph.height = 2.0
 	sph.radial_segments = 10
 	sph.rings = 6
 	mi.mesh = sph

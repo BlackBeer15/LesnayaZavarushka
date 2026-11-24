@@ -23,7 +23,7 @@ var pitch := 0.0
 var third_person := false
 var cinematic_mode := false
 
-var inventory: Array = ["pistol", "", "", "", "", "", "", ""]
+var inventory: Array = GameData.starter_inventory()
 var weapon_index := 0
 var ammo := 12
 var reloading := false
@@ -63,6 +63,12 @@ var viewmodel: Node3D = null
 var tp_weapon_anchor: Node3D = null
 var tp_weapon: Node3D = null
 var body_model: Node3D = null
+var upper_body: Node3D = null
+var leg_pivots: Array[Node3D] = []
+var walk_phase := 0.0
+var remote_speed := 0.0
+var _last_remote_pos := Vector3.ZERO
+var _last_remote_time := 0
 var muzzle_flash: OmniLight3D = null
 var flash_timer := 0.0
 var spawn_point := Vector3(-6.0, 0.0, 13.0)
@@ -215,6 +221,7 @@ func _physics_process(delta: float) -> void:
 		Net.rpc("report_transform", global_position, yaw, pitch)
 
 func _process(delta: float) -> void:
+	_update_body(delta)
 	if not is_local or camera == null or not is_instance_valid(camera):
 		return
 	if cinematic_mode:
@@ -265,10 +272,41 @@ func _process(delta: float) -> void:
 		if fire_timer <= 0.0 and not reloading:
 			_shoot(w)
 
+func _update_body(delta: float) -> void:
+	if body_model == null or not is_instance_valid(body_model):
+		return
+	body_model.rotation.y = yaw
+	if upper_body != null:
+		upper_body.rotation.x = clampf(pitch, -1.3, 1.3)
+	var speed := 0.0
+	if is_local:
+		speed = clampf(Vector2(velocity.x, velocity.z).length(), 0.0, 12.0)
+	else:
+		if _last_remote_time > 0 and Time.get_ticks_msec() - _last_remote_time > 250:
+			remote_speed = 0.0
+		speed = clampf(remote_speed, 0.0, 12.0)
+	if speed > 0.2:
+		walk_phase += delta * (2.5 + speed * 1.25)
+	else:
+		walk_phase = lerpf(walk_phase, 0.0, clampf(delta * 6.0, 0.0, 1.0))
+	var amplitude := clampf(speed / 8.0, 0.0, 1.0) * 0.55
+	for i in range(leg_pivots.size()):
+		var pivot: Node3D = leg_pivots[i]
+		if is_instance_valid(pivot):
+			pivot.rotation.x = sin(walk_phase + float(i) * PI) * amplitude
+
 func apply_remote_state(st: Dictionary) -> void:
 	if is_local:
 		return
 	var p: Vector3 = st.get("pos", global_position)
+	var now := Time.get_ticks_msec()
+	if _last_remote_time > 0:
+		var dt := float(now - _last_remote_time) / 1000.0
+		if dt > 0.004 and dt < 1.0:
+			var instant := clampf(_last_remote_pos.distance_to(p) / dt, 0.0, 12.0)
+			remote_speed = lerpf(remote_speed, instant, 0.5)
+	_last_remote_pos = p
+	_last_remote_time = now
 	position = p
 	yaw = float(st.get("yaw", yaw))
 	pitch = float(st.get("pitch", pitch))
@@ -337,53 +375,72 @@ func _build_body() -> void:
 	body_model = Node3D.new()
 	body_model.name = "BodyModel"
 	add_child(body_model)
+	# Корень поворачивается по yaw, верхняя часть — по pitch, ноги остаются вертикальными.
+	upper_body = Node3D.new()
+	upper_body.name = "UpperBody"
+	body_model.add_child(upper_body)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.20, 0.34, 0.22) if peer % 2 == 1 else Color(0.24, 0.26, 0.48)
 	var torso := MeshInstance3D.new()
 	var cap := CapsuleMesh.new()
 	cap.radius = 0.34
 	cap.height = 1.25
 	torso.mesh = cap
 	torso.position = Vector3(0.0, 1.0, 0.0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.20, 0.34, 0.22) if peer % 2 == 1 else Color(0.24, 0.26, 0.48)
 	torso.material_override = mat
-	body_model.add_child(torso)
+	upper_body.add_child(torso)
+
 	var head := MeshInstance3D.new()
 	var sph := SphereMesh.new()
 	sph.radius = 0.23
+	sph.height = 0.46 # SphereMesh.height по умолчанию 1.0 — без этого голова — игла
 	head.mesh = sph
 	head.position = Vector3(0.0, 1.82, 0.0)
 	var skin := StandardMaterial3D.new()
 	skin.albedo_color = Color(0.78, 0.61, 0.45)
 	head.material_override = skin
-	body_model.add_child(head)
+	upper_body.add_child(head)
 
+	# Руки тянутся от плеч к рукояти оружия и наклоняются вместе со взглядом.
+	var sleeve := StandardMaterial3D.new()
+	sleeve.albedo_color = _sleeve_color()
 	for sx in [-1.0, 1.0]:
+		_bone(upper_body, Vector3(0.30 * sx, 1.44, 0.02), Vector3(0.22 * sx, 1.28, -0.22), 0.12, sleeve)
+		_bone(upper_body, Vector3(0.22 * sx, 1.28, -0.22), Vector3(0.16 * sx, 1.14, -0.34), 0.10, sleeve)
+
+	leg_pivots.clear()
+	var pants := StandardMaterial3D.new()
+	pants.albedo_color = Color(0.16, 0.18, 0.14)
+	var boot_mat := StandardMaterial3D.new()
+	boot_mat.albedo_color = Color(0.09, 0.08, 0.07)
+	for sx in [-1.0, 1.0]:
+		var pivot := Node3D.new()
+		pivot.position = Vector3(0.16 * sx, 0.75, 0.0)
+		body_model.add_child(pivot)
+		leg_pivots.append(pivot)
 		var leg := MeshInstance3D.new()
 		var leg_mesh := CapsuleMesh.new()
 		leg_mesh.radius = 0.12
 		leg_mesh.height = 0.72
 		leg.mesh = leg_mesh
-		leg.position = Vector3(0.16 * sx, 0.35, 0.0)
-		var pants := StandardMaterial3D.new()
-		pants.albedo_color = Color(0.16, 0.18, 0.14)
+		leg.position = Vector3(0.0, -0.36, 0.0)
 		leg.material_override = pants
-		body_model.add_child(leg)
+		pivot.add_child(leg)
 		var boot := MeshInstance3D.new()
 		var boot_mesh := BoxMesh.new()
 		boot_mesh.size = Vector3(0.22, 0.12, 0.30)
 		boot.mesh = boot_mesh
-		boot.position = Vector3(0.16 * sx, 0.06, -0.06)
-		var boot_mat := StandardMaterial3D.new()
-		boot_mat.albedo_color = Color(0.09, 0.08, 0.07)
+		boot.position = Vector3(0.0, -0.70, -0.06)
 		boot.material_override = boot_mat
-		body_model.add_child(boot)
+		pivot.add_child(boot)
 
 	tp_weapon_anchor = Node3D.new()
 	tp_weapon_anchor.name = "TPWeaponAnchor"
 	tp_weapon_anchor.position = Vector3(0.20, 1.18, -0.30)
 	tp_weapon_anchor.rotation_degrees = Vector3(-6.0, -8.0, 0.0)
 	tp_weapon_anchor.scale = Vector3(0.52, 0.52, 0.52)
-	body_model.add_child(tp_weapon_anchor)
+	upper_body.add_child(tp_weapon_anchor)
 	_rebuild_third_person_weapon()
 
 	var name_tag := Label3D.new()
@@ -393,6 +450,20 @@ func _build_body() -> void:
 	name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	name_tag.position = Vector3(0.0, 2.35, 0.0)
 	body_model.add_child(name_tag)
+
+func _bone(parent: Node3D, a: Vector3, b: Vector3, thickness: float, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(thickness, thickness, a.distance_to(b))
+	mi.mesh = box
+	mi.material_override = mat
+	var z_axis := (a - b).normalized()
+	var x_axis := Vector3.UP.cross(z_axis).normalized()
+	if x_axis.length_squared() < 0.001:
+		x_axis = Vector3.RIGHT
+	var y_axis := z_axis.cross(x_axis)
+	mi.transform = Transform3D(Basis(x_axis, y_axis, z_axis), (a + b) * 0.5)
+	parent.add_child(mi)
 
 func _sleeve_color() -> Color:
 	return Color(0.20, 0.34, 0.22) if peer % 2 == 1 else Color(0.24, 0.26, 0.48)
