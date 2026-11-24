@@ -158,3 +158,7 @@ static func starter_inventory() -> Array:
 	while inv.size() < 8:
 		inv.append("")
 	return inv
+
+## Отладочные флаги работают только в debug-сборке.
+static func debug_arg(flag: String) -> bool:
+	return OS.is_debug_build() and OS.get_cmdline_user_args().has(flag)

@@ -253,7 +253,7 @@ func _build_terrain() -> void:
 	# HeightMapShape3D имеет шаг 1 юнит, растягиваем его до шага сетки.
 	body.scale = Vector3(step, 1.0, step)
 	add_child(body)
-	if OS.get_cmdline_user_args().has("--debug-state"):
+	if GameData.debug_arg("--debug-state"):
 		print("[WORLD] heightmap=", hshape.map_width, "x", hshape.map_depth, " data=", heights.size())
 
 func _build_forest() -> void:

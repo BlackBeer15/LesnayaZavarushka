@@ -51,13 +51,14 @@ func _ready() -> void:
 	GameState.running = false
 	# Быстрый старт из командной строки: --host  или  --join 192.168.1.5
 	var args := OS.get_cmdline_user_args()
-	debug_args = args
-	debug_state = args.has("--debug-state")
-	test_spin = args.has("--test-spin")
-	test_fire = args.has("--test-fire")
-	test_casino = args.has("--test-casino")
-	debug_look_down = args.has("--look-down")
-	test_inventory = args.has("--test-inventory")
+	# Тестовые флаги доступны только в debug-сборке; --host/--join работают всегда.
+	debug_args = args if OS.is_debug_build() else []
+	debug_state = GameData.debug_arg("--debug-state")
+	test_spin = GameData.debug_arg("--test-spin")
+	test_fire = GameData.debug_arg("--test-fire")
+	test_casino = GameData.debug_arg("--test-casino")
+	debug_look_down = GameData.debug_arg("--look-down")
+	test_inventory = GameData.debug_arg("--test-inventory")
 	if args.has("--host"):
 		_on_host_pressed()
 	elif args.size() >= 2 and args[0] == "--join":

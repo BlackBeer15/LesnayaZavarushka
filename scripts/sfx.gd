@@ -31,7 +31,7 @@ func _ready() -> void:
 	streams["spin"] = _make_chirp(0.10, 380.0, 560.0)
 	streams["hurt"] = _make_boom(0.28)
 	streams["ability"] = _make_chirp(0.42, 180.0, 640.0)
-	if OS.get_cmdline_user_args().has("--debug-state"):
+	if GameData.debug_arg("--debug-state"):
 		print("[SFX] streams=", streams.keys())
 
 func play(name: String, volume: float = 0.7) -> void:
