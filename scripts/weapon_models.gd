@@ -19,35 +19,22 @@ static func build(weapon_id: String, sleeve_color: Color) -> Node3D:
 	var steel := _mat(Color(0.55, 0.58, 0.62), 0.95, 0.18)
 	var accent := _mat(rc, 0.55, 0.3, rc, 0.25 if rarity >= 2 else 0.0)
 	var glass := _mat(Color(0.05, 0.12, 0.18), 0.4, 0.1, Color(0.2, 0.7, 1.0), 0.5)
-	var skin := _mat(Color(0.82, 0.62, 0.46), 0.0, 0.85)
-	var sleeve := _mat(sleeve_color, 0.0, 0.95)
-	var glove := _mat(Color(0.10, 0.12, 0.14), 0.1, 0.9)
 
 	match weapon_id:
 		"pistol":
 			_build_pistol(root, metal, dark, black, grip, steel, accent)
-			_make_right_hand(root, Vector3(0.01, -0.20, 0.06), Vector3(0.0, 0.0, 0.0), skin, sleeve, glove, false)
-			_make_left_hand(root, Vector3(-0.10, -0.17, -0.04), Vector3(0.0, 0.0, -35.0), skin, sleeve, glove, true)
 			root.set_meta("muzzle", Vector3(0.0, 0.055, -0.56))
 		"silver":
 			_build_revolver(root, metal, dark, wood, steel, accent)
-			_make_right_hand(root, Vector3(0.01, -0.22, 0.10), Vector3(0.0, 0.0, -8.0), skin, sleeve, glove, false)
-			_make_left_hand(root, Vector3(-0.09, -0.18, -0.02), Vector3(0.0, 0.0, -30.0), skin, sleeve, glove, true)
 			root.set_meta("muzzle", Vector3(0.0, 0.05, -0.66))
 		"shotgun":
 			_build_shotgun(root, metal, dark, black, wood, steel, accent)
-			_make_right_hand(root, Vector3(0.0, -0.19, 0.10), Vector3(0.0, 0.0, -6.0), skin, sleeve, glove, false)
-			_make_left_hand(root, Vector3(0.0, -0.12, -0.48), Vector3(0.0, 0.0, 12.0), skin, sleeve, glove, false)
 			root.set_meta("muzzle", Vector3(0.0, 0.045, -0.92))
 		"sniper":
 			_build_sniper(root, metal, dark, wood, steel, accent, glass)
-			_make_right_hand(root, Vector3(0.0, -0.19, 0.08), Vector3(0.0, 0.0, -5.0), skin, sleeve, glove, false)
-			_make_left_hand(root, Vector3(0.0, -0.10, -0.62), Vector3(0.0, 0.0, 10.0), skin, sleeve, glove, false)
 			root.set_meta("muzzle", Vector3(0.0, 0.035, -1.02))
 		"legend":
 			_build_legend(root, metal, dark, black, accent, glass)
-			_make_right_hand(root, Vector3(0.0, -0.19, 0.13), Vector3(0.0, 0.0, -5.0), skin, sleeve, glove, false)
-			_make_left_hand(root, Vector3(0.0, -0.11, -0.48), Vector3(0.0, 0.0, 14.0), skin, sleeve, glove, false)
 			root.set_meta("muzzle", Vector3(0.0, 0.02, -0.86))
 		_:
 			root.set_meta("muzzle", Vector3(0.0, 0.0, -0.5))
@@ -268,38 +255,4 @@ static func _build_legend(root: Node, metal: Material, dark: Material, black: Ma
 	_ring(root, "HoloReticle", 0.012, 0.018, Vector3(0.0, 0.17, -0.165), accent, Vector3(0.0, 0.0, 0.0))
 	_trigger_guard(root, -0.06, -0.01, dark)
 
-# ---------------------------------------------------------------------- hands ---
 
-static func _make_right_hand(parent: Node, palm_pos: Vector3, rot: Vector3, skin: Material, sleeve: Material, glove: Material, mirrored: bool) -> void:
-	var hand := Node3D.new()
-	hand.name = "RightHand"
-	hand.position = palm_pos
-	hand.rotation_degrees = rot
-	parent.add_child(hand)
-	var s := -1.0 if mirrored else 1.0
-	_box(hand, "Palm", Vector3(0.06, 0.08, 0.046), Vector3(0.0, 0.0, 0.0), glove)
-	for i in range(4):
-		_box(hand, "Finger%d" % i, Vector3(0.012, 0.05, 0.018),
-			Vector3(s * (-0.021 + float(i) * 0.014), -0.054, -0.01), skin,
-			Vector3(-24.0 - float(i) * 3.0, 0.0, s * 4.0))
-	_cyl(hand, "Thumb", 0.012, 0.012, 0.045, Vector3(s * 0.038, -0.022, 0.0), skin, Vector3(0.0, 0.0, s * 55.0), 8)
-	_cyl(hand, "Wrist", 0.028, 0.032, 0.05, Vector3(0.0, 0.06, 0.018), skin, Vector3(14.0, 0.0, 0.0), 10)
-	_box(hand, "Cuff", Vector3(0.07, 0.035, 0.07), Vector3(0.0, 0.095, 0.032), sleeve, Vector3(14.0, 0.0, 0.0))
-	_capsule(hand, "Forearm", 0.034, 0.22, Vector3(s * 0.015, 0.19, 0.06), sleeve, Vector3(16.0, 0.0, s * -5.0))
-
-static func _make_left_hand(parent: Node, palm_pos: Vector3, rot: Vector3, skin: Material, sleeve: Material, glove: Material, mirrored: bool) -> void:
-	var hand := Node3D.new()
-	hand.name = "LeftHand"
-	hand.position = palm_pos
-	hand.rotation_degrees = rot
-	parent.add_child(hand)
-	var s := -1.0 if mirrored else 1.0
-	_box(hand, "Palm", Vector3(0.062, 0.078, 0.044), Vector3(0.0, 0.0, 0.0), glove)
-	for i in range(4):
-		_box(hand, "Finger%d" % i, Vector3(0.012, 0.048, 0.018),
-			Vector3(s * (-0.022 + float(i) * 0.015), -0.052, -0.009), skin,
-			Vector3(-30.0 - float(i) * 2.0, 0.0, s * -5.0))
-	_cyl(hand, "Thumb", 0.012, 0.012, 0.042, Vector3(s * 0.038, -0.018, 0.004), skin, Vector3(0.0, 0.0, s * -50.0), 8)
-	_cyl(hand, "Wrist", 0.028, 0.032, 0.05, Vector3(0.0, 0.06, 0.024), skin, Vector3(18.0, 0.0, 0.0), 10)
-	_box(hand, "Cuff", Vector3(0.068, 0.035, 0.068), Vector3(0.0, 0.093, 0.04), sleeve, Vector3(18.0, 0.0, 0.0))
-	_capsule(hand, "Forearm", 0.033, 0.21, Vector3(s * -0.02, 0.185, 0.09), sleeve, Vector3(22.0, 0.0, s * 10.0))
