@@ -29,6 +29,9 @@ var noise_pos := Vector3.ZERO
 var noise_timer := 0.0
 var blind_timer := 0.0
 var paralyze_timer := 0.0
+var bleed_timer := 0.0
+var bleed_shooter := 0
+var stagger := 0.0
 var pending_death_at := 0
 var pending_death_shooter := 0
 var weak_markers: Array[MeshInstance3D] = []
@@ -198,6 +201,20 @@ func apply_remote(pos: Vector3, yaw: float, active: bool, _ability_index: int) -
 	if active != ability_active:
 		_set_ability_visual(active)
 
+func apply_bleed(duration: float, shooter_peer: int) -> void:
+	if dead or remote_proxy or not Net.is_host:
+		return
+	bleed_timer = maxf(bleed_timer, duration)
+	bleed_shooter = shooter_peer
+
+func flinch(from_pos: Vector3) -> void:
+	if dead or remote_proxy or not Net.is_host:
+		return
+	var away := global_position - from_pos
+	away.y = 0.0
+	velocity = away.normalized() * float(data["speed"]) * 0.8
+	stagger = 0.18
+
 func hear_noise(pos: Vector3, radius: float) -> void:
 	if remote_proxy or dead:
 		return
@@ -206,10 +223,18 @@ func hear_noise(pos: Vector3, radius: float) -> void:
 	noise_pos = pos
 	noise_timer = 4.0
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if pending_death_at > 0 and Time.get_ticks_msec() >= pending_death_at and is_instance_valid(self):
 		pending_death_at = 0
 		perform_death(pending_death_shooter, true)
+		return
+	if bleed_timer > 0.0 and not remote_proxy and not dead and Net.is_host:
+		bleed_timer -= delta
+		hp -= 6.5 * delta
+		if GameState.effects != null and randf() < delta * 7.0:
+			GameState.effects.spawn_hit(global_position + Vector3.UP * 0.3, Color(0.5, 0.02, 0.02), 3, 1.8)
+		if hp <= 0.0:
+			perform_death(bleed_shooter, false)
 
 func _physics_process(delta: float) -> void:
 	_update_weak_markers()
@@ -218,6 +243,12 @@ func _physics_process(delta: float) -> void:
 	if frozen or paralyze_timer > 0.0 or not GameState.running:
 		paralyze_timer = maxf(0.0, paralyze_timer - delta)
 		velocity = Vector3.ZERO
+		return
+	if stagger > 0.0:
+		stagger -= delta
+		move_and_slide()
+		if GameState.world != null:
+			global_position.y = GameState.world.ground_height(global_position.x, global_position.z) + 0.68 * scale.x
 		return
 	attack_cd -= delta
 	think_cd -= delta

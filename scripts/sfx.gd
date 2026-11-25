@@ -31,6 +31,7 @@ func _ready() -> void:
 	streams["spin"] = _make_chirp(0.10, 380.0, 560.0)
 	streams["hurt"] = _make_boom(0.28)
 	streams["ability"] = _make_chirp(0.42, 180.0, 640.0)
+	streams["reload"] = _make_reload()
 	if GameData.debug_arg("--debug-state"):
 		print("[SFX] streams=", streams.keys())
 
@@ -69,6 +70,17 @@ func _make_boom(duration: float) -> AudioStreamWAV:
 		var t := float(i) / float(RATE)
 		var env := pow(1.0 - float(i) / float(count), 3.0)
 		var v := (sin(t * 74.0) * 0.6 + sin(t * 121.0) * 0.3 + randf_range(-0.3, 0.3)) * env
+		_append_sample(data, v)
+	return _stream(data)
+
+func _make_reload() -> AudioStreamWAV:
+	var data := PackedByteArray()
+	var count := int(RATE * 0.32)
+	for i in range(count):
+		var t := float(i) / float(RATE)
+		var click1: float = exp(-pow((t - 0.03) * 60.0, 2.0))
+		var click2: float = exp(-pow((t - 0.19) * 45.0, 2.0))
+		var v := (randf_range(-0.5, 0.5) + sin(t * 900.0) * 0.4) * (click1 + click2) * 0.8
 		_append_sample(data, v)
 	return _stream(data)
 

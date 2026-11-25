@@ -64,10 +64,19 @@ const WEAPON_RECOIL := {
 	"legend": Vector2(0.55, 0.22),
 }
 
+## Паттерн отдачи: пары [ vertical, horizontal ] в радианах, по выстрелам.
+const RECOIL_PATTERNS := {
+	"pistol": [Vector2(0.019, 0.0), Vector2(0.023, 0.003), Vector2(0.021, -0.004), Vector2(0.017, 0.005)],
+	"silver": [Vector2(0.026, 0.0), Vector2(0.031, 0.006), Vector2(0.027, -0.008), Vector2(0.022, 0.010)],
+	"shotgun": [Vector2(0.066, 0.0), Vector2(0.059, 0.012), Vector2(0.052, -0.015)],
+	"sniper": [Vector2(0.080, 0.0), Vector2(0.062, 0.010)],
+	"legend": [Vector2(0.010, 0.0), Vector2(0.012, 0.002), Vector2(0.009, -0.003), Vector2(0.011, 0.004)],
+}
+
 const AMMO_TYPES := [
 	{"id": "normal", "name": "Обычные", "damage": 1.0, "pierce": false, "color": Color(0.85, 0.78, 0.45)},
 	{"id": "ap", "name": "Бронебойные", "damage": 1.35, "pierce": true, "color": Color(0.45, 0.75, 1.0)},
-	{"id": "hp", "name": "Экспансивные", "damage": 1.15, "pierce": false, "color": Color(1.0, 0.42, 0.35)},
+	{"id": "hp", "name": "Экспансивные", "damage": 1.15, "pierce": false, "bleed": true, "color": Color(1.0, 0.42, 0.35)},
 ]
 
 ## Животные. weak_eye / weak_heart заданы в локальных координатах модели

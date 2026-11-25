@@ -507,6 +507,10 @@ func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, am
 		elif crit_type != "":
 			damage *= 1.8
 		collider.take_damage(damage, hit_pos, sender, crit_type, bool(ammo["pierce"]))
+		if crit_type != "heart":
+			collider.flinch(origin)
+			if bool(ammo.get("bleed", false)):
+				collider.apply_bleed(4.0, sender)
 	return [hit_pos, animal_id, crit_type, damage, animal_name]
 
 func on_shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical_type: String, muzzle: Vector3, damage: float, animal_name: String) -> void:
@@ -517,8 +521,9 @@ func on_shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical_ty
 		if animal_id < 0:
 			effects.spawn_hit(hit_pos, Color(0.75, 0.70, 0.55), 5, 2.0)
 		else:
+			effects.spawn_hit(hit_pos, Color(0.55, 0.02, 0.02), 12 if critical_type == "" else 20, 4.5)
 			effects.spawn_damage_number(hit_pos, int(round(damage)), critical_type)
-			Sfx.play("hit", 0.45)
+			Sfx.play("hit", 0.55 if critical_type == "" else 0.8)
 	if shooter == Net.local_peer and hud != null:
 		hud.hit_marker(critical_type != "", critical_type == "heart")
 		shake(0.35 if critical_type == "heart" else 0.18)

@@ -197,6 +197,8 @@ func _physics_process(delta: float) -> void:
 		speed *= 0.62
 	if swimming:
 		speed *= 0.65
+	if bleeding > 0.0:
+		speed *= 0.72
 	velocity.x = lerp(velocity.x, move.x * speed, clampf(delta * 14.0, 0.0, 1.0))
 	velocity.z = lerp(velocity.z, move.z * speed, clampf(delta * 14.0, 0.0, 1.0))
 	if not swimming:
@@ -568,9 +570,13 @@ func _shoot(w: Dictionary) -> void:
 	if muzzle_flash != null:
 		muzzle_flash.light_energy = 3.0
 	Sfx.play_shot(wid, 0.85)
-	var recoil: Vector2 = GameData.WEAPON_RECOIL.get(wid, Vector2(1.0, 0.3))
-	aim_punch.y += recoil.x * (0.55 if aiming else 1.0) * deg_to_rad(1.0)
-	aim_punch.x += randf_range(-recoil.y, recoil.y) * deg_to_rad(1.0)
+	var pattern: Array = GameData.RECOIL_PATTERNS.get(wid, [Vector2(0.019, 0.0)])
+	var kick: Vector2 = pattern[shot_streak % pattern.size()]
+	var scale := 0.55 if aiming else 1.0
+	if crouching:
+		scale *= 0.75
+	aim_punch.y += kick.x * scale
+	aim_punch.x += kick.y * scale
 	shot_streak += 1
 	streak_timer = 0.45
 	noise_boost = 0.35
@@ -590,6 +596,7 @@ func start_reload() -> void:
 		return
 	reloading = true
 	reload_timer = float(w["reload"])
+	Sfx.play("reload", 0.45)
 	if hud != null:
 		hud.message("Перезарядка: %s" % GameData.AMMO_TYPES[ammo_type]["name"])
 
@@ -600,6 +607,7 @@ func _finish_reload() -> void:
 	var take := mini(need, reserves[ammo_type])
 	ammo += take
 	reserves[ammo_type] -= take
+	Sfx.play("reload", 0.35)
 
 func _interact() -> void:
 	if GameState.world == null or hud == null or hud.casino == null:
