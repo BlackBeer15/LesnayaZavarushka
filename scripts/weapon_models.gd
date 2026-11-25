@@ -4,20 +4,25 @@ extends RefCounted
 ## Детальные процедурные модели оружия и рук без внешних ассетов.
 ## Все модели смотрят в -Z. Корень имеет meta "muzzle" —本地 точка вылета пули.
 
-static func build(weapon_id: String, sleeve_color: Color) -> Node3D:
+static func build(weapon_id: String, sleeve_color: Color, skin_id: String = "default") -> Node3D:
 	var root := Node3D.new()
 	root.name = "WeaponModel_" + weapon_id
 	var w: Dictionary = GameData.WEAPONS[weapon_id]
 	var rarity := int(w["rarity"])
 	var rc: Color = GameData.RARITY_COLORS[rarity]
+	var skin: Dictionary = GameData.SKINS.get(skin_id, GameData.SKINS["default"])
 
-	var metal := _mat(w["color"], 0.85, 0.28)
+	var base_col: Color = w["color"] * skin["color"]
+	var metal := _mat(base_col, 0.85, 0.28)
 	var dark := _mat(Color(0.055, 0.062, 0.072), 0.55, 0.45)
 	var black := _mat(Color(0.02, 0.022, 0.026), 0.25, 0.7)
 	var grip := _mat(Color(0.11, 0.10, 0.095), 0.05, 0.92)
 	var wood := _mat(Color(0.34, 0.19, 0.085), 0.0, 0.75)
 	var steel := _mat(Color(0.55, 0.58, 0.62), 0.95, 0.18)
-	var accent := _mat(rc, 0.55, 0.3, rc, 0.25 if rarity >= 2 else 0.0)
+	var skin_col: Color = skin["color"]
+	var accent_col := rc.lerp(skin_col, 0.35)
+	var glow := maxf(0.25 if rarity >= 2 else 0.0, float(skin["glow"]))
+	var accent := _mat(accent_col, 0.55, 0.3, accent_col, glow)
 	var glass := _mat(Color(0.05, 0.12, 0.18), 0.4, 0.1, Color(0.2, 0.7, 1.0), 0.5)
 
 	match weapon_id:

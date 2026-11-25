@@ -55,6 +55,18 @@ const WEAPONS := {
 
 const WEAPON_ORDER := ["pistol", "silver", "shotgun", "sniper", "legend"]
 
+const SKINS := {
+	"default": {"name": "Стандарт", "color": Color(1.0, 1.0, 1.0), "glow": 0.0},
+	"forest": {"name": "Лесной", "color": Color(0.38, 0.62, 0.32), "glow": 0.15},
+	"neon": {"name": "Неоновый", "color": Color(0.25, 0.95, 0.90), "glow": 1.2},
+	"gold": {"name": "Золотой", "color": Color(1.0, 0.78, 0.18), "glow": 0.8},
+}
+const SKIN_ORDER := ["default", "forest", "neon", "gold"]
+const SHOP_PRICES := {"ammo": 12, "medkit": 18, "skin_forest": 45, "skin_neon": 80, "skin_gold": 140}
+
+static func level_for_xp(xp: int) -> int:
+	return 1 + int(sqrt(float(maxi(0, xp)) / 120.0))
+
 ## Вертикальный/горизонтальный разброс отдачи в градусах.
 const WEAPON_RECOIL := {
 	"pistol": Vector2(1.1, 0.35),

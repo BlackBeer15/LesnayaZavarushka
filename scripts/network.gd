@@ -15,6 +15,9 @@ var is_host := false
 var local_name := "Охотник"
 var world_seed := 424242
 var players := {} # peer -> state dictionary
+var progress_file := "user://progress.cfg"
+var saved_progress := {}
+var jackpot := 0
 var last_report_ms := {}
 var last_report_pos := {}
 var last_shot_ms := {}
@@ -26,7 +29,50 @@ var reconnect_attempts := 0
 var reconnect_at := 0
 
 func _ready() -> void:
-	pass
+	_load_progress()
+
+func _load_progress() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(progress_file) != OK:
+		return
+	for key in cfg.get_section_keys("players"):
+		saved_progress[str(key)] = cfg.get_value("players", key, {})
+	jackpot = int(cfg.get_value("meta", "jackpot", 0))
+
+func _save_progress() -> void:
+	if not is_host:
+		return
+	for peer in players:
+		var st: Dictionary = players[peer]
+		saved_progress[str(st["name"])] = {
+			"xp": st.get("xp", 0),
+			"coins": st.get("coins", 0),
+			"kills": st.get("kills", 0),
+			"best_crit": st.get("best_crit", 0.0),
+			"skins": st.get("skins", []),
+		}
+	var cfg := ConfigFile.new()
+	for name_key in saved_progress:
+		cfg.set_value("players", name_key, saved_progress[name_key])
+	cfg.set_value("meta", "jackpot", jackpot)
+	cfg.save(progress_file)
+
+func _restore_progress(peer: int) -> void:
+	if not players.has(peer):
+		return
+	var st: Dictionary = players[peer]
+	var pname := str(st["name"])
+	if not saved_progress.has(pname):
+		return
+	var data: Dictionary = saved_progress[pname]
+	st["xp"] = int(data.get("xp", 0))
+	st["coins"] = int(data.get("coins", 30))
+	st["kills"] = int(data.get("kills", 0))
+	st["best_crit"] = float(data.get("best_crit", 0.0))
+	var skins: Array = data.get("skins", [])
+	if skins.size() == 8:
+		st["skins"] = skins
+	st["level"] = GameData.level_for_xp(int(st["xp"]))
 
 func _new_state(peer: int, pname: String) -> Dictionary:
 	return {
@@ -41,6 +87,15 @@ func _new_state(peer: int, pname: String) -> Dictionary:
 		"inventory": GameData.starter_inventory(),
 		"weapon_index": 0,
 		"alive": true,
+		"xp": 0,
+		"level": 1,
+		"streak": 0,
+		"last_kill_ms": 0,
+		"best_crit": 0.0,
+		"quests": [0, 0, 0],
+		"quest_day": 0,
+		"skins": ["default", "default", "default", "default", "default", "default", "default", "default"],
+		"bet": "",
 	}
 
 func host_game(pname: String) -> bool:
@@ -57,6 +112,7 @@ func host_game(pname: String) -> bool:
 	multiplayer.multiplayer_peer = peer
 	_connect_signals()
 	players[1] = _new_state(1, pname)
+	_restore_progress(1)
 	connected_as.emit(1, world_seed)
 	player_list_changed.emit()
 	game_message.emit("Сервер запущен. Порт %d" % PORT, Color(0.6, 1.0, 0.6))
@@ -145,6 +201,7 @@ func _on_peer_connected(peer: int) -> void:
 func _on_peer_disconnected(peer: int) -> void:
 	if is_host:
 		players.erase(peer)
+		_save_progress()
 		rpc("player_left", peer)
 		player_list_changed.emit()
 		game_message.emit("Игрок %d отключился" % peer, Color(1.0, 0.75, 0.4))
@@ -157,6 +214,7 @@ func register_player(pname: String) -> void:
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	players[sender] = _new_state(sender, pname)
+	_restore_progress(sender)
 	# Клиенты создают узел игрока в welcome, а хост должен сделать это сам —
 	# иначе подключившегося игрока нет в сцене, хотя его состояние уже есть.
 	if main != null:
@@ -383,7 +441,7 @@ func spin_result(peer: int, reels: Array, text: String, weapon_id: String, coins
 func set_inventory_order(order: Array) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender == 0:
-		sender = multiplayer.get_local_pid()
+		sender = multiplayer.get_unique_id()
 	if not is_host or not players.has(sender):
 		return
 	players[sender]["inventory"] = order
@@ -393,6 +451,183 @@ func set_inventory_order(order: Array) -> void:
 func inventory_order(peer: int, order: Array) -> void:
 	if main != null:
 		main.on_inventory_order(peer, order)
+
+@rpc("any_peer", "call_local", "reliable")
+func spend_coins(amount: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(sender):
+		return
+	players[sender]["coins"] = maxi(0, int(players[sender]["coins"]) - amount)
+	rpc("coins_update", sender, players[sender]["coins"])
+
+@rpc("any_peer", "call_local", "reliable")
+func grant_coins(amount: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(sender):
+		return
+	players[sender]["coins"] = int(players[sender]["coins"]) + amount
+	rpc("coins_update", sender, players[sender]["coins"])
+
+@rpc("any_peer", "call_local", "reliable")
+func award_kill(peer: int, species: String, critical: bool, distance: float) -> void:
+	if not is_host or not players.has(peer):
+		return
+	var st: Dictionary = players[peer]
+	st["kills"] = int(st["kills"]) + 1
+	var gained := int(GameData.SPECIES[species]["coins"]) * 2 + (15 if critical else 0)
+	st["xp"] = int(st["xp"]) + gained
+	var new_level := GameData.level_for_xp(int(st["xp"]))
+	if new_level > int(st["level"]):
+		st["level"] = new_level
+		rpc("remote_message", "%s достиг уровня %d!" % [st["name"], new_level], Color(1.0, 0.85, 0.25))
+	var now := Time.get_ticks_msec()
+	if now - int(st["last_kill_ms"]) < 10000:
+		st["streak"] = int(st["streak"]) + 1
+	else:
+		st["streak"] = 1
+	st["last_kill_ms"] = now
+	var streak := int(st["streak"])
+	if streak == 3 or streak == 5 or streak == 10:
+		var bonus := streak * 5
+		st["coins"] = int(st["coins"]) + bonus
+		rpc("remote_message", "%s: серия %d! +%d монет" % [st["name"], streak, bonus], Color(1.0, 0.7, 0.2))
+	var day := int(Time.get_unix_time_from_system() / 86400.0)
+	if int(st["quest_day"]) != day:
+		st["quest_day"] = day
+		st["quests"] = [0, 0, 0]
+	var quests: Array = st["quests"]
+	if bool(GameData.SPECIES[species]["predator"]):
+		quests[1] = int(quests[1]) + 1
+	else:
+		quests[0] = int(quests[0]) + 1
+	if critical:
+		quests[2] = int(quests[2]) + 1
+		st["best_crit"] = maxf(float(st["best_crit"]), distance)
+	var targets := [5, 3, 2]
+	for i in range(3):
+		if int(quests[i]) >= targets[i]:
+			quests[i] = 0
+			st["coins"] = int(st["coins"]) + 25
+			rpc("remote_message", "%s выполнил задание! +25 монет" % st["name"], Color(0.5, 1.0, 0.5))
+	var bet := str(st.get("bet", ""))
+	if bet != "":
+		var is_predator := bool(GameData.SPECIES[species]["predator"])
+		if (bet == "predator") == is_predator:
+			st["coins"] = int(st["coins"]) + 40
+			rpc("remote_message", "%s выиграл ставку на охоту! +40" % st["name"], Color(0.6, 1.0, 0.6))
+		else:
+			st["coins"] = maxi(0, int(st["coins"]) - 20)
+		st["bet"] = ""
+	rpc("progress_update", peer, int(st["xp"]), int(st["level"]), int(st["streak"]),
+		int(st["coins"]), int(st["kills"]), float(st["best_crit"]), quests, st["skins"])
+	_save_progress()
+
+@rpc("call_local", "reliable")
+func progress_update(peer: int, xp: int, level: int, streak: int, coins: int, kills: int, best_crit: float, quests: Array, skins: Array) -> void:
+	if main != null:
+		main.on_progress_update(peer, xp, level, streak, coins, kills, best_crit, quests, skins)
+
+@rpc("any_peer", "call_local", "reliable")
+func buy_item(item: String) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(sender):
+		return
+	var st: Dictionary = players[sender]
+	var price := int(GameData.SHOP_PRICES.get(item, -1))
+	if price < 0 or int(st["coins"]) < price:
+		rpc("remote_message", "Не хватает монет", Color(1.0, 0.4, 0.3))
+		return
+	st["coins"] = int(st["coins"]) - price
+	if item == "ammo":
+		rpc("buy_result", sender, "ammo", 0)
+	elif item == "medkit":
+		st["health"] = minf(100.0, float(st["health"]) + 45.0)
+		rpc("health_update", sender, st["health"])
+		rpc("buy_result", sender, "medkit", 0)
+	else:
+		var skin := item.trim_prefix("skin_")
+		if GameData.SKINS.has(skin):
+			var skins: Array = st["skins"]
+			skins[clampi(int(st["weapon_index"]), 0, 7)] = skin
+			rpc("buy_result", sender, skin, int(st["weapon_index"]))
+			rpc("progress_update", sender, st["xp"], st["level"], st["streak"], st["coins"], st["kills"], st["best_crit"], st["quests"], skins)
+	rpc("remote_message", "Покупка: %s" % item, Color(0.7, 0.95, 1.0))
+	_save_progress()
+
+@rpc("call_local", "reliable")
+func buy_result(peer: int, item: String, slot: int) -> void:
+	if main != null:
+		main.on_buy_result(peer, item, slot)
+
+@rpc("any_peer", "call_local", "reliable")
+func roulette(peer_id: int, bet: String) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(sender):
+		return
+	var st: Dictionary = players[sender]
+	if int(st["coins"]) < 15:
+		rpc("remote_message", "Не хватает монет для рулетки", Color(1.0, 0.4, 0.3))
+		return
+	st["coins"] = int(st["coins"]) - 15
+	jackpot += 1
+	var number := randi_range(0, 36)
+	var color := "green" if number == 0 else ("red" if number % 2 == 1 else "black")
+	var win := bet == color
+	if win:
+		var payout := 30
+		st["coins"] = int(st["coins"]) + payout
+		if jackpot > 0:
+			st["coins"] = int(st["coins"]) + jackpot
+			jackpot = 0
+	rpc("roulette_result", sender, number, color, win, int(st["coins"]), jackpot)
+	_save_progress()
+
+@rpc("call_local", "reliable")
+func roulette_result(peer: int, number: int, color: String, win: bool, coins: int, bank: int) -> void:
+	if main != null:
+		main.on_roulette_result(peer, number, color, win, coins, bank)
+
+@rpc("any_peer", "call_local", "reliable")
+func hunt_bet(side: String) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host or not players.has(sender):
+		return
+	var st: Dictionary = players[sender]
+	if int(st["coins"]) < 20:
+		rpc("remote_message", "Не хватает монет для ставки", Color(1.0, 0.4, 0.3))
+		return
+	st["coins"] = int(st["coins"]) - 20
+	st["bet"] = side
+	rpc("remote_message", "%s сделал ставку: %s" % [st["name"], side], Color(0.8, 0.8, 1.0))
+
+@rpc("any_peer", "reliable")
+func request_stats() -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if not is_host:
+		return
+	var arr := []
+	for peer in players:
+		var st: Dictionary = players[peer]
+		arr.append([str(st["name"]), int(st["kills"]), int(st["coins"]), int(st["level"]), float(st["best_crit"])])
+	arr.append(["JACKPOT", jackpot, 0, 0, 0.0])
+	rpc_id(sender, "stats_data", arr)
+
+@rpc("reliable")
+func stats_data(arr: Array) -> void:
+	if main != null:
+		main.on_stats_data(arr)
 
 @rpc("any_peer", "reliable")
 func request_name_change(pname: String) -> void:

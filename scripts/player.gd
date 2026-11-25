@@ -31,6 +31,12 @@ var reload_timer := 0.0
 var fire_timer := 0.0
 var ammo_type := 0
 var reserves: Array[int] = [72, 24, 36]
+var xp := 0
+var level := 1
+var streak := 0
+var best_crit := 0.0
+var quests: Array = [0, 0, 0]
+var skins: Array = ["default", "default", "default", "default", "default", "default", "default", "default"]
 
 var aiming := false
 var crouching := false
@@ -500,7 +506,7 @@ func _rebuild_third_person_weapon() -> void:
 		return
 	if tp_weapon != null and is_instance_valid(tp_weapon):
 		tp_weapon.queue_free()
-	tp_weapon = WeaponModels.build(current_weapon_id(), _sleeve_color())
+	tp_weapon = WeaponModels.build(current_weapon_id(), _sleeve_color(), current_skin())
 	tp_weapon_anchor.add_child(tp_weapon)
 
 func _build_viewmodel() -> void:
@@ -533,7 +539,7 @@ func _rebuild_weapon_model() -> void:
 	for c in viewmodel.get_children():
 		if c != muzzle_flash:
 			c.queue_free()
-	var model := WeaponModels.build(current_weapon_id(), _sleeve_color())
+	var model := WeaponModels.build(current_weapon_id(), _sleeve_color(), current_skin())
 	viewmodel.add_child(model)
 	var muzzle: Vector3 = model.get_meta("muzzle", Vector3(0.0, 0.0, -0.5))
 	viewmodel.set_meta("muzzle", muzzle)
@@ -704,6 +710,24 @@ func collect_pickup(kind: String) -> void:
 			reserves[idx] += 18
 			if hud != null:
 				hud.message("%s: +18" % GameData.AMMO_TYPES[idx]["name"], GameData.AMMO_TYPES[idx]["color"])
+
+func apply_progress(new_xp: int, new_level: int, new_streak: int, new_coins: int, new_kills: int, new_best: float, new_quests: Array, new_skins: Array) -> void:
+	xp = new_xp
+	level = new_level
+	streak = new_streak
+	coins = new_coins
+	kills = new_kills
+	best_crit = new_best
+	quests = new_quests.duplicate()
+	skins = new_skins.duplicate()
+	while skins.size() < 8:
+		skins.append("default")
+	if is_local:
+		_rebuild_weapon_model()
+
+func current_skin() -> String:
+	var s: String = skins[clampi(weapon_index, 0, skins.size() - 1)]
+	return s if GameData.SKINS.has(s) else "default"
 
 func rebuild_viewmodel() -> void:
 	if is_local:

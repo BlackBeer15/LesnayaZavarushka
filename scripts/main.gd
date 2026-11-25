@@ -45,6 +45,8 @@ var test_inventory := false
 var test_inventory_timer := 6.0
 var debug_args: Array = []
 var debug_weapon_done := false
+var test_m4 := false
+var test_m4_done := false
 
 func _ready() -> void:
 	Settings.apply_video() # окно/разрешение/VSync/MSAA по сохранённым настройкам
@@ -64,6 +66,7 @@ func _ready() -> void:
 	test_casino = GameData.debug_arg("--test-casino")
 	debug_look_down = GameData.debug_arg("--look-down")
 	test_inventory = GameData.debug_arg("--test-inventory")
+	test_m4 = GameData.debug_arg("--test-m4")
 	if args.has("--host"):
 		_on_host_pressed()
 	elif args.size() >= 2 and args[0] == "--join":
@@ -464,6 +467,11 @@ func ensure_player(peer: int) -> void:
 		int(st.get("kills", 0)), st.get("inventory", ["pistol"]),
 		int(st.get("weapon_index", 0))
 	)
+	p.apply_progress(
+		int(st.get("xp", 0)), int(st.get("level", 1)), int(st.get("streak", 0)),
+		int(st.get("coins", 30)), int(st.get("kills", 0)), float(st.get("best_crit", 0.0)),
+		st.get("quests", [0, 0, 0]), st.get("skins", p.skins)
+	)
 	stage.add_child(p)
 	player_nodes[peer] = p
 	GameState.players.append(p)
@@ -681,11 +689,14 @@ func on_animal_died(animal_id: int, pos: Vector3, species: String, critical: boo
 		for _i in range(n):
 			coin_id_counter += 1
 			Net.rpc("spawn_coins", coin_id_counter, pos + Vector3(randf_range(-0.8, 0.8), 0.2, randf_range(-0.8, 0.8)), maxi(1, int(round(float(coin_value) / float(n)))))
-	if shooter == Net.local_peer:
+	if Net.is_host and Net.players.has(shooter):
+		var dist := 0.0
 		var killer = get_player_node(shooter)
 		if killer != null:
-			killer.kills += 1
-			hud.message("%s повержен%s" % [GameData.SPECIES[species]["name"], " — КРИТ!" if critical else ""], Color(1.0, 0.4, 0.3))
+			dist = killer.global_position.distance_to(pos)
+		Net.rpc("award_kill", shooter, species, critical, dist)
+	if shooter == Net.local_peer and hud != null:
+		hud.message("%s повержен%s" % [GameData.SPECIES[species]["name"], " — КРИТ!" if critical else ""], Color(1.0, 0.4, 0.3))
 
 func on_spawn_coin(coin_id: int, pos: Vector3, value: int) -> void:
 	if effects != null:
@@ -726,6 +737,40 @@ func on_spin_result(peer: int, reels: Array, text: String, weapon_id: String, co
 	if peer == Net.local_peer and hud != null and hud.casino != null:
 		hud.casino.show_result(reels, text, weapon_id)
 		Sfx.play("crit" if weapon_id != "" else "spin", 0.7)
+
+func on_progress_update(peer: int, xp: int, level: int, streak: int, coins: int, kills: int, best_crit: float, quests: Array, skins: Array) -> void:
+	if player_nodes.has(peer):
+		player_nodes[peer].apply_progress(xp, level, streak, coins, kills, best_crit, quests, skins)
+	if peer == Net.local_peer and hud != null:
+		hud.message("Опыт + | Уровень %d | Серия %d" % [level, streak], Color(0.6, 0.9, 1.0))
+		if hud.casino != null:
+			hud.casino.refresh_all()
+
+func on_buy_result(peer: int, item: String, slot: int) -> void:
+	if peer != Net.local_peer:
+		return
+	var p = player_nodes.get(peer, null)
+	if p == null:
+		return
+	if item == "ammo":
+		for i in range(3):
+			p.reserves[i] += 24
+		if hud != null:
+			hud.message("Патроны: +24 каждого типа")
+	elif GameData.SKINS.has(item):
+		p.apply_progress(p.xp, p.level, p.streak, p.coins, p.kills, p.best_crit, p.quests, p.skins)
+		p.rebuild_viewmodel()
+		if hud != null:
+			hud.message("Скин установлен: %s" % GameData.SKINS[item]["name"])
+
+func on_roulette_result(peer: int, number: int, color: String, win: bool, coins: int, bank: int) -> void:
+	if peer == Net.local_peer and hud != null and hud.casino != null:
+		hud.casino.show_roulette(number, color, win, coins, bank)
+		Sfx.play("spin", 0.7)
+
+func on_stats_data(arr: Array) -> void:
+	if hud != null and hud.casino != null:
+		hud.casino.show_stats(arr)
 
 func _on_net_message(text: String, color: Color) -> void:
 	if status_label != null and menu_layer.visible:
@@ -784,6 +829,14 @@ func _process(delta: float) -> void:
 					Net.rpc("set_inventory_order", new_order)
 					print("[DBG] reorder local=%s host=%s" % [
 						str(lp2.inventory), str(Net.players.get(Net.local_peer, {}).get("inventory", []))])
+	if test_m4 and not test_m4_done:
+		test_m4_done = true
+		Net.rpc("buy_item", "ammo")
+		Net.rpc("roulette", Net.local_peer, "red")
+		Net.rpc("hunt_bet", "predator")
+		Net.rpc("request_stats")
+		Net.rpc("award_kill", Net.local_peer, "deer", true, 42.0)
+		print("[DBG] M4 test done")
 	if test_casino:
 		test_casino_timer -= delta
 		if test_casino_timer <= 0.0:

@@ -53,6 +53,7 @@ var crosshair_label: Label
 var hit_marker_label: Label
 var stamina_fill: ColorRect
 var status_label: Label
+var progress_label: Label
 var damage_overlay: ColorRect
 var cinematic_bar_top: ColorRect
 var cinematic_bar_bottom: ColorRect
@@ -145,6 +146,7 @@ func setup(p, casino_ui) -> void:
 	root.add_child(stamina_fill)
 
 	status_label = _make_label(root, Vector2(12, 154), Vector2(300, 24), "", Color(1.0, 0.5, 0.35), 15)
+	progress_label = _make_label(root, Vector2(12, 176), Vector2(340, 56), "", Color(0.65, 0.88, 1.0), 14)
 
 	message_label = _make_label(root, Vector2(16, -46), Vector2(600, 30), "", Color.WHITE, 18)
 	message_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT, true)
@@ -250,6 +252,13 @@ func _process(delta: float) -> void:
 	elif player.swimming:
 		status = "ПЛАВАНИЕ"
 	status_label.text = status
+	var q: Array = player.quests
+	progress_label.text = "Ур.%d  Опыт %d  Серия %d\nЗадания: травоядные %d/5  хищные %d/3  криты %d/2" % [
+		player.level, player.xp, player.streak,
+		int(q[0]) if q.size() > 0 else 0,
+		int(q[1]) if q.size() > 1 else 0,
+		int(q[2]) if q.size() > 2 else 0,
+	]
 	if inventory != null and inventory.is_open:
 		inventory.refresh()
 
