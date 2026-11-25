@@ -146,7 +146,7 @@ func _refresh() -> void:
 	if player == null:
 		return
 	coins_label.text = "МОНЕТЫ: %d   (крутка = %d)" % [player.coins, GameData.COIN_COST]
-	var lines := ["АРСЕНАЛ (цифры 1-5):"]
+	var lines := ["АРСЕНАЛ (цифры 1-8):"]
 	for i in range(player.inventory.size()):
 		var id: String = player.inventory[i]
 		if id == "":

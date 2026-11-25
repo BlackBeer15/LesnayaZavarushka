@@ -4,11 +4,11 @@ extends Node
 
 const RATE := 22050
 const SHOT_FILES := {
-	"pistol": "res://Pistol.mp3",
-	"silver": "res://revolver.mp3",
-	"shotgun": "res://shotgun.mp3",
-	"sniper": "res://sniper.mp3",
-	"legend": "res://laser.mp3",
+	"pistol": "res://assets/audio/Pistol.mp3",
+	"silver": "res://assets/audio/revolver.mp3",
+	"shotgun": "res://assets/audio/shotgun.mp3",
+	"sniper": "res://assets/audio/sniper.mp3",
+	"legend": "res://assets/audio/laser.mp3",
 }
 var streams := {}
 var voices: Array[AudioStreamPlayer] = []

@@ -136,10 +136,11 @@ func _build_menu() -> void:
 	status_label = _label(panel, Vector2(50, 296), Vector2(670, 30), "", Color(1.0, 0.82, 0.30), 17)
 	server_list = _label(panel, Vector2(50, 334), Vector2(670, 92), "", Color(0.78, 0.90, 0.80), 16)
 
-	_label(panel, Vector2(50, 440), Vector2(670, 82),
-		"Управление: WASD — движение, мышь — обзор, ЛКМ — выстрел, R — перезарядка,\n"
-		+ "Пробел — прыжок, V — камера, E — казино, F — спин, 1-5 — оружие, Esc — меню",
-		Color(0.72, 0.78, 0.72), 15)
+	_label(panel, Vector2(50, 436), Vector2(670, 92),
+		"Управление: WASD — движение, мышь — обзор, ЛКМ — выстрел, ПКМ — прицел,\n"
+		+ "R — перезарядка, Q — патроны, Shift — спринт, Ctrl — присед, Пробел — прыжок,\n"
+		+ "V — камера, E — казино, F — спин, Tab — инвентарь, 1-8 — оружие, Esc — меню",
+		Color(0.72, 0.78, 0.72), 14)
 	_build_settings_panel()
 
 func _build_settings_panel() -> void:
