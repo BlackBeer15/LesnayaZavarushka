@@ -65,6 +65,8 @@ var viewmodel: Node3D = null
 var tp_weapon_anchor: Node3D = null
 var tp_weapon: Node3D = null
 var body_model: Node3D = null
+var remote_target := Vector3.ZERO
+var remote_yaw := 0.0
 var upper_body: Node3D = null
 var leg_pivots: Array[Node3D] = []
 var walk_phase := 0.0
@@ -93,6 +95,8 @@ func setup(peer_id: int, pname: String, cam: Camera3D, hud_ref, local: bool) -> 
 	add_to_group("players")
 	name = "Player_%d" % peer_id
 	spawn_point = position
+	remote_target = position
+	remote_yaw = yaw
 	ammo = int(GameData.WEAPONS["pistol"]["mag"])
 	_build_body()
 	body_model.visible = not local
@@ -117,6 +121,10 @@ func _setup_actions() -> void:
 	_add("spin", KEY_F)
 	_add("inventory", KEY_TAB)
 	_add("flashlight", KEY_L)
+	_add("msg0", KEY_Z)
+	_add("msg1", KEY_X)
+	_add("msg2", KEY_C)
+	_add("msg3", KEY_B)
 	for i in range(8):
 		_add("equip%d" % (i + 1), KEY_1 + i)
 
@@ -138,6 +146,8 @@ func _action(base: String) -> String:
 
 func _physics_process(delta: float) -> void:
 	if not is_local:
+		global_position = global_position.lerp(remote_target, clampf(delta * 14.0, 0.0, 1.0))
+		rotation.y = lerp_angle(rotation.y, remote_yaw, clampf(delta * 10.0, 0.0, 1.0))
 		return
 	if not GameState.running or cinematic_mode:
 		velocity.x = 0.0
@@ -263,6 +273,9 @@ func _process(delta: float) -> void:
 			hud.message("Патроны: %s" % GameData.AMMO_TYPES[ammo_type]["name"], GameData.AMMO_TYPES[ammo_type]["color"])
 	if Input.is_action_just_pressed(_action("spin")):
 		Net.rpc("spin_request")
+	for mi in range(4):
+		if Input.is_action_just_pressed(_action("msg%d" % mi)):
+			Net.rpc("quick_message", mi)
 	if Input.is_action_just_pressed(_action("flashlight")):
 		flashlight_on = not flashlight_on
 		if hud != null:
@@ -316,8 +329,9 @@ func apply_remote_state(st: Dictionary) -> void:
 			remote_speed = lerpf(remote_speed, instant, 0.5)
 	_last_remote_pos = p
 	_last_remote_time = now
-	position = p
-	yaw = float(st.get("yaw", yaw))
+	remote_target = p
+	remote_yaw = float(st.get("yaw", yaw))
+	yaw = remote_yaw
 	pitch = float(st.get("pitch", pitch))
 	health = float(st.get("health", health))
 	coins = int(st.get("coins", coins))
@@ -581,7 +595,7 @@ func _shoot(w: Dictionary) -> void:
 			+ camera.global_basis.x * randf_range(-spread, spread)
 			+ camera.global_basis.y * randf_range(-spread, spread)
 		).normalized()
-		Net.rpc("request_shoot", camera.global_position, dir, wid, muzzle, ammo_type)
+		Net.rpc("request_shoot", camera.global_position, dir, wid, muzzle, ammo_type, Time.get_ticks_msec())
 	ammo -= 1
 	fire_timer = float(w["rate"])
 	flash_timer = 0.09

@@ -29,6 +29,7 @@ var bullet_node: MeshInstance3D = null
 var cinematic := false
 var rain_particles: GPUParticles3D = null
 var snow_particles: GPUParticles3D = null
+var animal_history: Array = []
 var debug_state := false
 var debug_timer := 0.0
 var test_spin := false
@@ -521,11 +522,11 @@ func update_animal_proxies(data: Array, frame: int, last_chunk: bool) -> void:
 		var node = _find_animal(aid)
 		if node == null:
 			node = Animal.new()
-			node.setup(aid, str(e[1]), Vector3(float(e[2]), float(e[3]), float(e[4])), true)
+			node.setup(aid, str(e[1]), Vector3(float(e[2]) / 100.0, float(e[3]) / 100.0, float(e[4]) / 100.0), true)
 			stage.add_child(node)
 		node.apply_remote(
-			Vector3(float(e[2]), float(e[3]), float(e[4])),
-			float(e[5]), bool(e[6]), int(e[7])
+			Vector3(float(e[2]) / 100.0, float(e[3]) / 100.0, float(e[4]) / 100.0),
+			float(e[5]) / 1000.0, bool(e[6]), int(e[7])
 		)
 	if last_chunk:
 		for a in GameState.animals.duplicate():
@@ -542,7 +543,24 @@ func _find_animal(aid: int):
 			return a
 	return null
 
-func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, ammo_type: int) -> Array:
+func _record_animal_history() -> void:
+	var t := Time.get_ticks_msec()
+	for a in GameState.animals:
+		if a == null or not is_instance_valid(a) or a.remote_proxy or a.dead:
+			continue
+		animal_history.append({"t": t, "id": a.animal_id, "pos": a.global_position, "s": a.scale.x})
+	while not animal_history.is_empty() and t - int(animal_history[0]["t"]) > 700:
+		animal_history.pop_front()
+
+func _historical_animals(target_t: int) -> Dictionary:
+	var result := {}
+	for h in animal_history:
+		if int(h["t"]) > target_t:
+			break
+		result[int(h["id"])] = h
+	return result
+
+func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, ammo_type: int, latency_ms: int) -> Array:
 	if not Net.is_host:
 		return []
 	var w: Dictionary = GameData.WEAPONS.get(weapon_id, GameData.WEAPONS["pistol"])
@@ -554,14 +572,44 @@ func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, am
 		query.exclude = [shooter.get_rid()]
 	query.collision_mask = 1 | 2
 	var hit: Dictionary = stage.get_world_3d().direct_space_state.intersect_ray(query)
-	if hit.is_empty():
-		return []
-	var hit_pos: Vector3 = hit["position"]
+	var hit_pos: Vector3 = hit["position"] if not hit.is_empty() else to
+	var env_dist := origin.distance_to(hit_pos) if not hit.is_empty() else INF
+
+	# Компенсация задержки: ищем попадание по позициям зверей на момент выстрела.
+	var past := _historical_animals(Time.get_ticks_msec() - latency_ms)
+	var best_t := INF
+	var best_animal = null
+	for a in GameState.animals:
+		if a == null or not is_instance_valid(a) or a.remote_proxy or a.dead:
+			continue
+		var h: Dictionary = past.get(a.animal_id, {"pos": a.global_position, "s": a.scale.x})
+		var center: Vector3 = h["pos"] + Vector3.UP * 0.35 * float(h["s"])
+		var radius := 0.62 * float(h["s"])
+		var oc := origin - center
+		var b := oc.dot(dir)
+		var c := oc.length_squared() - radius * radius
+		var disc := b * b - c
+		if disc < 0.0:
+			continue
+		var sq := sqrt(disc)
+		var t := -b - sq
+		if t < 0.0:
+			t = -b + sq
+		if t < 0.0 or t >= best_t or t >= env_dist:
+			continue
+		best_t = t
+		best_animal = a
+	if best_animal != null:
+		hit_pos = origin + dir * best_t
+	var collider = best_animal
+	if collider == null and not hit.is_empty() and hit["collider"] is Animal:
+		collider = hit["collider"]
+		hit_pos = hit["position"]
+
 	var animal_id := -1
 	var crit_type := ""
 	var damage := 0.0
 	var animal_name := ""
-	var collider = hit["collider"]
 	if collider is Animal and not collider.remote_proxy:
 		animal_id = collider.animal_id
 		animal_name = collider.data["name"]
@@ -578,6 +626,8 @@ func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, am
 				collider.apply_bleed(4.0, sender)
 		if world != null:
 			world.add_scent(hit_pos, 9.0)
+	elif hit.is_empty():
+		return []
 	return [hit_pos, animal_id, crit_type, damage, animal_name]
 
 func on_shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical_type: String, muzzle: Vector3, damage: float, animal_name: String) -> void:
@@ -755,7 +805,7 @@ func _process(delta: float) -> void:
 		if test_fire_timer <= 0.0:
 			test_fire_timer = 2.0
 			if not Net.is_host:
-				Net.rpc("request_shoot", camera.global_position, -camera.global_basis.z, "pistol", camera.global_position, 1)
+				Net.rpc("request_shoot", camera.global_position, -camera.global_basis.z, "pistol", camera.global_position, 1, Time.get_ticks_msec())
 				return
 			var nearest = null
 			var best := 1.0e9
@@ -770,7 +820,7 @@ func _process(delta: float) -> void:
 				var target: Vector3 = nearest.to_global(nearest.data["weak_heart"])
 				var origin: Vector3 = nearest.to_global(Vector3(0.0, 0.2, -2.5))
 				var dir := (target - origin).normalized()
-				Net.rpc("request_shoot", origin, dir, "sniper", origin, 0)
+				Net.rpc("request_shoot", origin, dir, "sniper", origin, 0, Time.get_ticks_msec())
 	if Net.is_host:
 		snapshot_timer -= delta
 		if snapshot_timer <= 0.0:
@@ -781,6 +831,7 @@ func _process(delta: float) -> void:
 	_update_killcam()
 
 func _send_snapshots() -> void:
+	_record_animal_history()
 	var pdata := []
 	for peer in player_nodes.keys():
 		var p = player_nodes[peer]
@@ -792,12 +843,20 @@ func _send_snapshots() -> void:
 			st["pos"] = p.global_position
 			st["yaw"] = p.yaw
 			st["pitch"] = p.pitch
-		pdata.append([peer, p.global_position.x, p.global_position.y, p.global_position.z, p.yaw, p.pitch])
+		pdata.append([
+			peer,
+			roundi(p.global_position.x * 100.0), roundi(p.global_position.y * 100.0), roundi(p.global_position.z * 100.0),
+			roundi(p.yaw * 1000.0), roundi(p.pitch * 1000.0),
+		])
 	var adata := []
 	for a in GameState.animals:
 		if a == null or not is_instance_valid(a) or a.remote_proxy:
 			continue
-		adata.append([a.animal_id, a.species_id, a.global_position.x, a.global_position.y, a.global_position.z, a.rotation.y, a.ability_active, int(a.ability_end > Time.get_ticks_msec())])
+		adata.append([
+			a.animal_id, a.species_id,
+			roundi(a.global_position.x * 100.0), roundi(a.global_position.y * 100.0), roundi(a.global_position.z * 100.0),
+			roundi(a.rotation.y * 1000.0), int(a.ability_active), int(a.ability_end > Time.get_ticks_msec()),
+		])
 	Net.snapshot_tick(pdata, adata)
 
 # ------------------------------------------------------------- КИЛЛКАМ ---

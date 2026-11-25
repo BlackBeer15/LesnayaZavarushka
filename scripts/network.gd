@@ -15,6 +15,15 @@ var is_host := false
 var local_name := "Охотник"
 var world_seed := 424242
 var players := {} # peer -> state dictionary
+var last_report_ms := {}
+var last_report_pos := {}
+var last_shot_ms := {}
+var client_latency := {}
+var want_reconnect := false
+var reconnect_ip := ""
+var reconnect_name := ""
+var reconnect_attempts := 0
+var reconnect_at := 0
 
 func _ready() -> void:
 	pass
@@ -55,6 +64,8 @@ func host_game(pname: String) -> bool:
 
 func join_game(ip: String, pname: String) -> bool:
 	local_name = pname
+	reconnect_ip = ip
+	reconnect_name = pname
 	is_host = false
 	local_peer = 0
 	var peer := ENetMultiplayerPeer.new()
@@ -76,6 +87,7 @@ func disconnect_game() -> void:
 	players.clear()
 	is_host = false
 	local_peer = 0
+	want_reconnect = false
 
 func _connect_signals() -> void:
 	if not multiplayer.peer_connected.is_connected(_on_peer_connected):
@@ -90,17 +102,42 @@ func _connect_signals() -> void:
 		multiplayer.server_disconnected.connect(_on_server_disconnected)
 
 func _on_connected_to_server() -> void:
+	want_reconnect = false
+	reconnect_attempts = 0
 	rpc("register_player", local_name)
+
+func _start_reconnect() -> void:
+	if is_host or reconnect_ip.is_empty():
+		return
+	want_reconnect = true
+	reconnect_attempts = 0
+	reconnect_at = Time.get_ticks_msec() + 2000
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+		multiplayer.multiplayer_peer = null
+	game_message.emit("Соединение потеряно, пробуем переподключиться...", Color(1.0, 0.75, 0.35))
+
+func _process(_delta: float) -> void:
+	if not want_reconnect or Time.get_ticks_msec() < reconnect_at:
+		return
+	if multiplayer.multiplayer_peer != null:
+		return
+	want_reconnect = false
+	reconnect_attempts += 1
+	if reconnect_attempts > 3:
+		game_message.emit("Не удалось переподключиться. Вернитесь в меню.", Color(1.0, 0.3, 0.3))
+		return
+	join_game(reconnect_ip, reconnect_name)
 
 func _on_connection_failed() -> void:
 	GameLog.error("Не удалось подключиться к серверу")
-	GameLog.show_error("Ошибка подключения", "Сервер недоступен. Проверьте, что хост запустил игру и разрешил порт %d." % PORT)
 	game_message.emit("Не удалось подключиться к серверу", Color(1.0, 0.3, 0.3))
+	_start_reconnect()
 
 func _on_server_disconnected() -> void:
 	GameLog.warn("Сервер отключился")
-	GameLog.show_error("Соединение потеряно", "Сервер отключился. Вернитесь в меню и подключитесь снова.")
 	game_message.emit("Сервер отключился", Color(1.0, 0.3, 0.3))
+	_start_reconnect()
 
 func _on_peer_connected(peer: int) -> void:
 	pass
@@ -155,6 +192,17 @@ func report_transform(pos: Vector3, yaw: float, pitch: float) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if not players.has(sender):
 		return
+	# Античит: отбрасываем телепорты и скорость выше возможной.
+	var now := Time.get_ticks_msec()
+	var prev_ms := int(last_report_ms.get(sender, 0))
+	var prev_pos: Vector3 = last_report_pos.get(sender, pos)
+	var dt := float(now - prev_ms) / 1000.0
+	if prev_ms > 0 and dt > 0.01 and dt < 2.0:
+		var dist := pos.distance_to(prev_pos)
+		if dist < 30.0 and dist / dt > 18.0:
+			return
+	last_report_ms[sender] = now
+	last_report_pos[sender] = pos
 	players[sender]["pos"] = pos
 	players[sender]["yaw"] = yaw
 	players[sender]["pitch"] = pitch
@@ -169,9 +217,9 @@ func snapshot_players(data: Array) -> void:
 		if not players.has(peer):
 			players[peer] = _new_state(peer, "Охотник")
 		var st: Dictionary = players[peer]
-		st["pos"] = Vector3(float(e[1]), float(e[2]), float(e[3]))
-		st["yaw"] = float(e[4])
-		st["pitch"] = float(e[5])
+		st["pos"] = Vector3(float(e[1]) / 100.0, float(e[2]) / 100.0, float(e[3]) / 100.0)
+		st["yaw"] = float(e[4]) / 1000.0
+		st["pitch"] = float(e[5]) / 1000.0
 		if main != null and peer != multiplayer.get_unique_id():
 			main.update_remote_player(peer, st)
 
@@ -181,13 +229,23 @@ func snapshot_animals(data: Array, frame: int, last_chunk: bool) -> void:
 		main.update_animal_proxies(data, frame, last_chunk)
 
 @rpc("any_peer", "call_local", "reliable")
-func request_shoot(origin: Vector3, dir: Vector3, weapon_id: String, muzzle: Vector3, ammo_type: int) -> void:
+func request_shoot(origin: Vector3, dir: Vector3, weapon_id: String, muzzle: Vector3, ammo_type: int, sent_msec: int) -> void:
 	var sender := multiplayer.get_remote_sender_id()
 	if sender == 0:
 		sender = multiplayer.get_unique_id()
 	if not is_host or main == null:
 		return
-	var result: Array = main.host_fire(sender, origin, dir, weapon_id, ammo_type)
+	var now := Time.get_ticks_msec()
+	var last := int(last_shot_ms.get(sender, 0))
+	var rate := float(GameData.WEAPONS.get(weapon_id, GameData.WEAPONS["pistol"])["rate"])
+	if now - last < int(rate * 500.0):
+		return
+	last_shot_ms[sender] = now
+	client_latency[sender] = clampi(now - sent_msec, 0, 300)
+	var st: Dictionary = players.get(sender, {})
+	if sender != multiplayer.get_unique_id() and st.has("pos") and st["pos"].distance_to(origin) > 8.0:
+		return
+	var result: Array = main.host_fire(sender, origin, dir, weapon_id, ammo_type, client_latency[sender])
 	if result.is_empty():
 		return
 	rpc("shoot_result", sender, result[0], result[1], result[2], muzzle, result[3], result[4])
@@ -204,6 +262,18 @@ func make_noise(pos: Vector3, radius: float) -> void:
 	for a in GameState.animals:
 		if a != null and is_instance_valid(a) and not a.remote_proxy:
 			a.hear_noise(pos, radius)
+
+const QUICK_MESSAGES := ["Здесь зверь!", "Нужны патроны!", "Мне нужна помощь!", "Я здесь!"]
+
+@rpc("any_peer", "call_local", "reliable")
+func quick_message(index: int) -> void:
+	var sender := multiplayer.get_remote_sender_id()
+	if sender == 0:
+		sender = multiplayer.get_unique_id()
+	if index < 0 or index >= QUICK_MESSAGES.size() or not players.has(sender):
+		return
+	var text := "%s: %s" % [players[sender].get("name", "Игрок"), QUICK_MESSAGES[index]]
+	rpc("remote_message", text, Color(0.7, 0.9, 1.0))
 
 @rpc("any_peer", "call_local", "reliable")
 func heal(peer: int, amount: float) -> void:

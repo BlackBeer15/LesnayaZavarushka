@@ -226,8 +226,8 @@ func _build_collision() -> void:
 func apply_remote(pos: Vector3, yaw: float, active: bool, _ability_index: int) -> void:
 	if not remote_proxy:
 		return
-	position = pos
-	rotation.y = yaw
+	position = position.lerp(pos, 0.4)
+	rotation.y = lerp_angle(rotation.y, yaw, 0.35)
 	_animate(get_process_delta_time())
 	_update_weak_markers()
 	if active != ability_active:
