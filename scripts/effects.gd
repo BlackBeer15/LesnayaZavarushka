@@ -278,6 +278,27 @@ func spawn_decal(pos: Vector3, animal_scale: float) -> void:
 	add_child(mi)
 	decals.append({"node": mi, "life": 22.0})
 
+func spawn_track(pos: Vector3, yaw: float) -> void:
+	var ground := 0.0
+	if GameState.world != null:
+		ground = GameState.world.ground_height(pos.x, pos.z)
+	var mi := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.14
+	cyl.bottom_radius = 0.14
+	cyl.height = 0.02
+	cyl.radial_segments = 8
+	mi.mesh = cyl
+	var mat := _flat_mat(Color(0.16, 0.12, 0.08), 0.0)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color.a = 0.5
+	mi.material_override = mat
+	mi.position = Vector3(pos.x, ground + 0.03, pos.z)
+	mi.rotation_degrees.y = rad_to_deg(yaw)
+	mi.scale = Vector3(1.0, 1.0, 1.8)
+	add_child(mi)
+	decals.append({"node": mi, "life": 14.0})
+
 func spawn_damage_number(pos: Vector3, amount: int, crit_type: String) -> void:
 	var label := Label3D.new()
 	label.text = str(amount)

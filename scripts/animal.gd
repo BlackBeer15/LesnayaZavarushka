@@ -36,6 +36,15 @@ var pending_death_at := 0
 var pending_death_shooter := 0
 var weak_markers: Array[MeshInstance3D] = []
 var marker_mat: StandardMaterial3D = null
+var legs: Array[MeshInstance3D] = []
+var last_pos := Vector3.ZERO
+var gait_phase := 0.0
+var herd_timer := 0.0
+var scent_target := Vector3.ZERO
+var scent_timer := 0.0
+var boss_phase := false
+var track_timer := 0.0
+var cached_avoid := Vector3.ZERO
 
 var fur_mat: StandardMaterial3D
 var eye_mat: StandardMaterial3D
@@ -95,6 +104,7 @@ func _build_body() -> void:
 			leg.position = Vector3(0.24 * sx, -0.34, 0.42 * sz)
 			leg.material_override = fur_mat
 			visual.add_child(leg)
+			legs.append(leg)
 	match data.get("ear", "long"):
 		"long":
 			for sx in [-1.0, 1.0]:
@@ -116,6 +126,15 @@ func _build_body() -> void:
 	ability_label.position = Vector3(0.0, 1.35, 0.0)
 	ability_label.visible = false
 	add_child(ability_label)
+	if bool(data.get("boss", false)):
+		var boss_label := Label3D.new()
+		boss_label.text = "ЦАРЬ ЛЕСА"
+		boss_label.font_size = 52
+		boss_label.outline_size = 8
+		boss_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		boss_label.modulate = Color(1.0, 0.75, 0.2)
+		boss_label.position = Vector3(0.0, 2.4, 0.0)
+		add_child(boss_label)
 	_build_weak_markers()
 
 func _build_weak_markers() -> void:
@@ -155,6 +174,18 @@ func _update_weak_markers() -> void:
 			m.visible = show
 			if show:
 				m.scale = Vector3.ONE * (0.045 + sin(Time.get_ticks_msec() * 0.008) * 0.012)
+
+func _animate(delta: float) -> void:
+	if legs.is_empty():
+		return
+	var moved := global_position.distance_to(last_pos) / maxf(delta, 0.001)
+	last_pos = global_position
+	var running := clampf(moved / maxf(float(data["speed"]), 0.1), 0.0, 1.0)
+	gait_phase += delta * (4.0 + moved * 1.2)
+	for i in range(legs.size()):
+		if is_instance_valid(legs[i]):
+			legs[i].rotation_degrees.x = sin(gait_phase + float(i) * PI * 0.5) * 34.0 * running
+	visual.position.y = absf(sin(gait_phase)) * 0.045 * running
 
 func _add_sphere(n: String, pos: Vector3, size: Vector3, mat: Material) -> void:
 	var mi := MeshInstance3D.new()
@@ -197,6 +228,7 @@ func apply_remote(pos: Vector3, yaw: float, active: bool, _ability_index: int) -
 		return
 	position = pos
 	rotation.y = yaw
+	_animate(get_process_delta_time())
 	_update_weak_markers()
 	if active != ability_active:
 		_set_ability_visual(active)
@@ -267,7 +299,9 @@ func _physics_process(delta: float) -> void:
 	var dir := Vector3.ZERO
 	var speed := float(data["speed"])
 	var interest := Vector3.ZERO
-	if noise_timer > 0.0 and global_position.distance_to(noise_pos) < 55.0:
+	if scent_timer > 0.0:
+		interest = scent_target
+	elif noise_timer > 0.0 and global_position.distance_to(noise_pos) < 55.0:
 		interest = noise_pos
 	elif target != null:
 		interest = target.global_position
@@ -300,6 +334,11 @@ func _physics_process(delta: float) -> void:
 	var center_dist := Vector2(global_position.x, global_position.z).length()
 	if center_dist > GameData.MAP_HALF - 12.0:
 		dir = (dir + Vector3(-global_position.x, 0.0, -global_position.z).normalized() * 2.0).normalized()
+	dir = (dir + cached_avoid).normalized()
+	track_timer -= delta
+	if track_timer <= 0.0 and speed > 1.0 and GameState.effects != null:
+		track_timer = 0.9
+		GameState.effects.spawn_track(global_position, rotation.y)
 	velocity.x = dir.x * speed
 	velocity.z = dir.z * speed
 	velocity.y = 0.0
@@ -308,31 +347,113 @@ func _physics_process(delta: float) -> void:
 		global_position.y = GameState.world.ground_height(global_position.x, global_position.z) + 0.68 * scale.x
 	if dir.length_squared() > 0.01:
 		rotation.y = lerp_angle(rotation.y, atan2(-dir.x, -dir.z), clampf(delta * 9.0, 0.0, 1.0))
+	_animate(delta)
+
+func _update_avoidance() -> void:
+	if velocity.length_squared() < 0.01:
+		cached_avoid = Vector3.ZERO
+		return
+	cached_avoid = _avoid_obstacles(velocity.normalized()) - velocity.normalized()
+
+func _avoid_obstacles(dir: Vector3) -> Vector3:
+	if GameState.world == null:
+		return dir
+	var p2 := Vector2(global_position.x, global_position.z)
+	var steer := Vector2.ZERO
+	for o in GameState.world.tree_obstacles:
+		var op: Vector2 = o["pos"]
+		var r := float(o["radius"]) + 1.3
+		var d := p2.distance_to(op)
+		if d < r and d > 0.001:
+			steer += (p2 - op).normalized() * ((r - d) / r) * 2.4
+	# Поляна казино: не заходить в стены здания.
+	if absf(p2.x) < 9.5 and absf(p2.y) < 8.5 and p2.length() > 0.001:
+		steer += p2.normalized() * 2.5
+	var out := Vector3(dir.x + steer.x, 0.0, dir.z + steer.y)
+	return out.normalized() if out.length_squared() > 0.001 else dir
+
+func _nearest_prey():
+	var best = null
+	var best_d := 1.0e9
+	var prey_detect := float(data["detect"]) * 1.6
+	for a in GameState.animals:
+		if a == null or not is_instance_valid(a) or a == self or a.dead:
+			continue
+		if bool(a.data["predator"]):
+			continue
+		var d := global_position.distance_squared_to(a.global_position)
+		if d < best_d and d < prey_detect * prey_detect:
+			best_d = d
+			best = a
+	return best
+
+func _alert_herd() -> void:
+	for a in GameState.animals:
+		if a == null or not is_instance_valid(a) or a == self or bool(a.data["predator"]):
+			continue
+		if a.global_position.distance_squared_to(global_position) < 400.0:
+			a.noise_pos = global_position
+			a.noise_timer = 3.0
 
 func _think() -> void:
+	herd_timer = maxf(0.0, herd_timer - 0.35)
+	scent_timer = maxf(0.0, scent_timer - 0.35)
+	if GameState.world != null:
+		var scent: Dictionary = GameState.world.nearest_scent(global_position, 28.0)
+		if not scent.is_empty():
+			scent_target = scent["pos"]
+			scent_timer = 3.0
+	var predator := bool(data["predator"])
 	var noise_near := noise_timer > 0.0 and global_position.distance_to(noise_pos) < 45.0
-	if bool(data["predator"]) and blind_timer > 0.0:
+	var scent_near := scent_timer > 0.0
+	if predator and blind_timer > 0.0:
 		state = State.WANDER
 		return
+	if predator:
+		var prey = _nearest_prey()
+		if prey != null:
+			target = prey
+		else:
+			target = GameState.nearest_player(global_position)
+	else:
+		target = GameState.nearest_player(global_position)
 	if target == null:
-		state = State.CHASE if noise_near and bool(data["predator"]) else (State.FLEE if noise_near else State.WANDER)
+		state = State.WANDER
+		if predator and (noise_near or scent_near):
+			state = State.CHASE
+		elif not predator and (noise_near or scent_near):
+			state = State.FLEE
 		return
 	var d := global_position.distance_to(target.global_position)
-	var noise_factor := 1.0 + clampf(float(target.noise_radius) / 30.0, 0.0, 2.0)
+	var noise_factor := 1.0
+	if target is Player:
+		noise_factor = 1.0 + clampf(float(target.noise_radius) / 30.0, 0.0, 2.0)
 	var detect := float(data["detect"]) * noise_factor
-	if bool(data["predator"]):
-		state = State.CHASE if (d < detect or noise_near) else State.WANDER
+	if GameState.world != null and GameState.world.night_factor > 0.5:
+		detect *= 0.7
+	if predator:
+		state = State.CHASE if (d < detect or noise_near or scent_near) else State.WANDER
 	else:
-		state = State.FLEE if (d < detect or noise_near) else State.WANDER
+		state = State.FLEE if (d < detect or noise_near or scent_near) else State.WANDER
+		if state == State.FLEE and herd_timer <= 0.0:
+			herd_timer = 1.5
+			_alert_herd()
 	if ability_active and ability == "charge" and state == State.CHASE:
 		state = State.CHARGE
+	_update_avoidance()
 
-func _attack(player) -> void:
+func _attack(victim) -> void:
 	attack_cd = 0.75 if (ability_active and ability == "berserk") else 1.15
 	var dmg := float(data["damage"])
 	if ability_active and ability == "berserk":
 		dmg *= 2.0
-	player.take_damage(dmg, global_position)
+	if victim is Animal:
+		victim.take_damage(dmg, global_position, 0, "", false)
+		victim.apply_bleed(3.0, 0)
+		if GameState.world != null:
+			GameState.world.add_scent(victim.global_position, 14.0)
+	else:
+		victim.take_damage(dmg, global_position)
 	if ability_active and ability == "vampire":
 		hp = minf(max_hp, hp + dmg * 0.8)
 
@@ -399,6 +520,12 @@ func take_damage(amount: float, hit_pos: Vector3, shooter_peer: int, crit_type: 
 		paralyze_timer = 2.5
 	var mult := 1.0 if (pierce or not (ability_active and ability == "shield")) else 0.32
 	hp -= amount * mult
+	if bool(data.get("boss", false)) and not boss_phase and hp < max_hp * 0.5:
+		boss_phase = true
+		ability_active = true
+		ability_end = 9223372036854775807
+		_set_ability_visual(true)
+		Net.broadcast_message("Царь леса впадает в ярость!", Color(1.0, 0.3, 0.15))
 	if hp <= 0.0:
 		perform_death(shooter_peer, crit_type != "")
 

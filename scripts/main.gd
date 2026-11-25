@@ -27,6 +27,8 @@ var snapshot_timer := 0.0
 var killcam: Dictionary = {}
 var bullet_node: MeshInstance3D = null
 var cinematic := false
+var rain_particles: GPUParticles3D = null
+var snow_particles: GPUParticles3D = null
 var debug_state := false
 var debug_timer := 0.0
 var test_spin := false
@@ -139,7 +141,7 @@ func _build_menu() -> void:
 	_label(panel, Vector2(50, 436), Vector2(670, 92),
 		"Управление: WASD — движение, мышь — обзор, ЛКМ — выстрел, ПКМ — прицел,\n"
 		+ "R — перезарядка, Q — патроны, Shift — спринт, Ctrl — присед, Пробел — прыжок,\n"
-		+ "V — камера, E — казино, F — спин, Tab — инвентарь, 1-8 — оружие, Esc — меню",
+		+ "V — камера, L — фонарик, E — казино, Tab — инвентарь, 1-8 — оружие, Esc — меню",
 		Color(0.72, 0.78, 0.72), 14)
 	_build_settings_panel()
 
@@ -342,6 +344,7 @@ func _build_scene(seed_value: int) -> void:
 	camera.near = 0.06
 	camera.far = 500.0
 	add_child(camera)
+	_setup_weather()
 
 	world = WorldGen.new()
 	world.name = "Forest"
@@ -363,20 +366,82 @@ func _build_scene(seed_value: int) -> void:
 	add_child(hud)
 	hud.setup(null, CasinoUI.new())
 
+func _make_precipitation(color: Color, size: Vector2, velocity: float, amount: int) -> GPUParticles3D:
+	var p := GPUParticles3D.new()
+	p.amount = amount
+	p.lifetime = 0.85
+	p.local_coords = true
+	var mat := ParticleProcessMaterial.new()
+	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	mat.emission_box_extents = Vector3(14.0, 0.5, 14.0)
+	mat.direction = Vector3(0.0, -1.0, 0.0)
+	mat.spread = 2.0
+	mat.initial_velocity_min = velocity
+	mat.initial_velocity_max = velocity * 1.2
+	mat.gravity = Vector3(0.0, -3.0, 0.0)
+	mat.scale_min = 0.8
+	mat.scale_max = 1.2
+	p.process_material = mat
+	var quad := QuadMesh.new()
+	quad.size = size
+	var qmat := StandardMaterial3D.new()
+	qmat.albedo_color = color
+	qmat.emission_enabled = true
+	qmat.emission = color
+	qmat.emission_energy = 0.4
+	qmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	qmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	p.draw_pass_1 = quad
+	p.material_override = qmat
+	p.position = Vector3(0.0, 6.0, 0.0)
+	camera.add_child(p)
+	return p
+
+func _setup_weather() -> void:
+	rain_particles = _make_precipitation(Color(0.55, 0.75, 0.95, 0.55), Vector2(0.02, 0.42), 22.0, 260)
+	snow_particles = _make_precipitation(Color(1.0, 1.0, 1.0, 0.85), Vector2(0.07, 0.07), 3.5, 180)
+	rain_particles.emitting = false
+	snow_particles.emitting = false
+
+func _update_weather() -> void:
+	if rain_particles == null or snow_particles == null:
+		return
+	rain_particles.emitting = world.weather == "rain"
+	snow_particles.emitting = world.weather == "snow" and world.night_factor > 0.5
+
 func _spawn_initial_animals() -> void:
 	var pool := ["rabbit", "rabbit", "rabbit", "rabbit", "deer", "deer", "deer", "boar", "boar", "fox", "fox", "wolf", "wolf", "bear"]
 	for _i in range(78):
 		_spawn_animal(pool[randi_range(0, pool.size() - 1)])
 
-func _spawn_animal(species: String):
+func _spawn_animal(species: String, at: Vector3 = Vector3.ZERO):
 	if not Net.is_host:
 		return null
 	animal_id_counter += 1
-	var pos := GameState.random_point_in_forest()
+	var pos := at if at != Vector3.ZERO else GameState.random_point_in_forest()
 	var a := Animal.new()
 	a.setup(animal_id_counter, species, pos)
 	stage.add_child(a)
 	return a
+
+func _has_boss() -> bool:
+	for a in GameState.animals:
+		if a != null and is_instance_valid(a) and bool(a.data.get("boss", false)):
+			return true
+	return false
+
+func _respawn_wildlife() -> void:
+	var pos := GameState.random_point_in_forest()
+	var biome := world.biome_at(pos.x, pos.z)
+	var species := "rabbit"
+	if randf() < 0.012 and not _has_boss():
+		species = "bear_alpha"
+		broadcast("В лесу появился Царь леса!", Color(1.0, 0.75, 0.2))
+	else:
+		var pool: Array = world.species_for_biome(biome)
+		species = pool[randi_range(0, pool.size() - 1)]
+	_spawn_animal(species, pos)
 
 # --------------------------------------------------------------- ИГРОКИ ---
 
@@ -511,6 +576,8 @@ func host_fire(sender: int, origin: Vector3, dir: Vector3, weapon_id: String, am
 			collider.flinch(origin)
 			if bool(ammo.get("bleed", false)):
 				collider.apply_bleed(4.0, sender)
+		if world != null:
+			world.add_scent(hit_pos, 9.0)
 	return [hit_pos, animal_id, crit_type, damage, animal_name]
 
 func on_shoot_result(shooter: int, hit_pos: Vector3, animal_id: int, critical_type: String, muzzle: Vector3, damage: float, animal_name: String) -> void:
@@ -557,6 +624,8 @@ func on_animal_died(animal_id: int, pos: Vector3, species: String, critical: boo
 	if effects != null:
 		var sc: float = float(GameData.SPECIES[species]["scale"])
 		effects.spawn_gore(pos, sc, GameData.SPECIES[species]["color"], critical)
+	if Net.is_host and world != null:
+		world.add_scent(pos, 24.0)
 	if Net.is_host:
 		var n := randi_range(3, 6)
 		for _i in range(n):
@@ -629,6 +698,10 @@ func _process(delta: float) -> void:
 					str(p.is_on_floor()), GameState.animals.size(), p.coins, player_nodes.size(), str(p.inventory)])
 	if not world_ready:
 		return
+	world.update_cycle(delta)
+	if Net.is_host:
+		world.tick_scents(delta)
+	_update_weather()
 	if debug_args.has("--test-weapon") and not debug_weapon_done:
 		var lpw = player_nodes.get(Net.local_peer, null)
 		var widx := debug_args.find("--test-weapon")
@@ -704,8 +777,7 @@ func _process(delta: float) -> void:
 			snapshot_timer = 0.09
 			_send_snapshots()
 		if GameState.animals.size() < 80 and randf() < delta * 0.35:
-			var pool := ["rabbit", "rabbit", "deer", "boar", "fox", "wolf", "bear"]
-			_spawn_animal(pool[randi_range(0, pool.size() - 1)])
+			_respawn_wildlife()
 	_update_killcam()
 
 func _send_snapshots() -> void:

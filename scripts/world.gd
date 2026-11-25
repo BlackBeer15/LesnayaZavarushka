@@ -14,7 +14,15 @@ var casino_center := Vector3.ZERO
 ## Деревья, камни и кусты рисуются MultiMesh-ами и не попадают в физику,
 ## поэтому для камеры киллкама храним упрощённые вертикальные цилиндры.
 var camera_occluders: Array = []
+var tree_obstacles: Array = []
+var scent_sources: Array = []
 var sun_light: DirectionalLight3D = null
+var world_env: Environment = null
+var sky_material: ProceduralSkyMaterial = null
+var time_of_day := 0.28
+var weather := "clear"
+var night_factor := 0.0
+const DAY_LENGTH := 360.0
 
 const SHADOW_DISTANCES := [0.0, 60.0, 110.0, 170.0]
 
@@ -160,6 +168,8 @@ func _build_sky() -> void:
 	env.fog_density = 0.0032
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.tonemap_exposure = 1.05
+	world_env = env
+	sky_material = sky_mat
 
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -182,6 +192,60 @@ func apply_shadow_quality(quality: int) -> void:
 	sun_light.shadow_enabled = q > 0
 	sun_light.directional_shadow_max_distance = SHADOW_DISTANCES[q]
 	sun_light.shadow_blur = q >= 2
+
+func update_cycle(_delta: float) -> void:
+	time_of_day = fmod(Time.get_ticks_msec() / 1000.0 / DAY_LENGTH, 1.0)
+	var sun_angle := time_of_day * TAU - PI * 0.5
+	var elevation := sin(sun_angle)
+	var daylight := clampf((elevation + 0.18) / 0.55, 0.0, 1.0)
+	night_factor = 1.0 - daylight
+	if sun_light != null and is_instance_valid(sun_light):
+		sun_light.rotation_degrees = Vector3(-20.0 - elevation * 55.0, -38.0 + time_of_day * 360.0, 0.0)
+		sun_light.light_energy = lerpf(0.06, 1.35, daylight)
+		sun_light.light_color = Color(0.35, 0.45, 0.85).lerp(Color(1.0, 0.95, 0.82), daylight)
+	if world_env != null:
+		world_env.ambient_light_energy = lerpf(0.12, 0.65, daylight)
+		weather = "clear"
+		if time_of_day > 0.62 and time_of_day < 0.74:
+			weather = "rain"
+		elif time_of_day < 0.08:
+			weather = "fog"
+		var fog := 0.0032 + night_factor * 0.004 + (0.006 if weather == "fog" else 0.0)
+		world_env.fog_density = fog
+		world_env.fog_light_color = Color(0.47, 0.59, 0.55).lerp(Color(0.10, 0.14, 0.22), night_factor * 0.8)
+	if sky_material != null:
+		sky_material.sky_top_color = Color(0.05, 0.08, 0.18).lerp(Color(0.16, 0.31, 0.50), daylight)
+		sky_material.sky_horizon_color = Color(0.14, 0.18, 0.28).lerp(Color(0.45, 0.62, 0.66), daylight)
+		sky_material.ground_horizon_color = Color(0.07, 0.10, 0.14).lerp(Color(0.16, 0.24, 0.16), daylight)
+
+func add_scent(pos: Vector3, strength: float) -> void:
+	scent_sources.append({"pos": pos, "life": strength})
+	if scent_sources.size() > 64:
+		scent_sources.pop_front()
+
+func nearest_scent(pos: Vector3, radius: float) -> Dictionary:
+	var best := {}
+	var best_d := radius * radius
+	for s in scent_sources:
+		var d: float = s["pos"].distance_squared_to(pos)
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
+
+func tick_scents(delta: float) -> void:
+	for i in range(scent_sources.size() - 1, -1, -1):
+		scent_sources[i]["life"] -= delta
+		if float(scent_sources[i]["life"]) <= 0.0:
+			scent_sources.remove_at(i)
+
+func species_for_biome(biome: int) -> Array:
+	match biome:
+		1: return ["rabbit", "rabbit", "deer", "fox"]
+		2: return ["wolf", "wolf", "bear", "boar"]
+		3: return ["boar", "rabbit", "fox"]
+		4: return ["rabbit", "deer"]
+		_: return ["rabbit", "rabbit", "deer", "deer", "boar", "fox", "wolf", "bear"]
 
 func _build_terrain() -> void:
 	var st := SurfaceTool.new()
@@ -314,6 +378,7 @@ func _build_forest() -> void:
 			"radius": 0.95 * s,
 			"height": 4.4 * s,
 		})
+		tree_obstacles.append({"pos": Vector2(x, z), "radius": 0.55 * s})
 
 	var trunk_mesh := CylinderMesh.new()
 	trunk_mesh.radial_segments = 6
@@ -533,6 +598,23 @@ func _build_landmarks() -> void:
 		_box(t, Vector3(0.45, 7.0, 0.45), Vector3(1.1, 3.5, 1.1), Color(0.30, 0.20, 0.12))
 		_box(t, Vector3(3.0, 0.35, 3.0), Vector3(0.0, 7.2, 0.0), Color(0.34, 0.22, 0.13))
 		_box(t, Vector3(3.4, 0.25, 3.4), Vector3(0.0, 7.65, 0.0), Color(0.22, 0.14, 0.09))
+
+	# Костры: свет ночью и укрытие для игрока.
+	var fires := [Vector2(18.0, 8.0), Vector2(-24.0, -14.0), Vector2(50.0, 40.0), Vector2(-70.0, 45.0)]
+	for fp in fires:
+		var y := ground_height(fp.x, fp.y)
+		var f := Node3D.new()
+		f.position = Vector3(fp.x, y, fp.y)
+		add_child(f)
+		for i in range(4):
+			var log := _box(f, Vector3(1.5, 0.16, 0.16), Vector3(0.0, 0.1, 0.0), Color(0.24, 0.14, 0.07), false)
+			log.rotation_degrees.y = float(i) * 45.0
+		var flame := OmniLight3D.new()
+		flame.light_color = Color(1.0, 0.48, 0.12)
+		flame.light_energy = 2.2
+		flame.omni_range = 14.0
+		flame.position = Vector3(0.0, 0.5, 0.0)
+		f.add_child(flame)
 
 func _box(parent: Node, size: Vector3, pos: Vector3, color: Color, collision: bool = true) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()

@@ -130,6 +130,14 @@ const SPECIES := {
 		"weak_eyes": [Vector3(-0.14, 0.25, -0.82), Vector3(0.14, 0.25, -0.82)],
 		"weak_heart": Vector3(0.0, 0.02, -0.16), "ear": "round",
 	},
+	"bear_alpha": {
+		"name": "Царь леса", "predator": true, "hp": 460.0, "speed": 6.8,
+		"damage": 38.0, "scale": 1.75, "coins": 120, "detect": 42.0,
+		"ability": "berserk", "ability_name": "Гнев тайги",
+		"color": Color(0.86, 0.87, 0.84), "eye_color": Color(1.0, 0.15, 0.08),
+		"weak_eyes": [Vector3(-0.14, 0.25, -0.82), Vector3(0.14, 0.25, -0.82)],
+		"weak_heart": Vector3(0.0, 0.02, -0.16), "ear": "round", "boss": true,
+	},
 }
 
 const ABILITY_COLORS := {

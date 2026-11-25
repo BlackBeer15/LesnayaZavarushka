@@ -54,6 +54,8 @@ var vm_slide_z := 0.0
 var vm_bolt_z := 0.0
 var vm_pump_z := 0.0
 var vm_mag_y := 0.0
+var flashlight_on := false
+var flashlight_light: SpotLight3D = null
 
 var base_speed := 7.2
 var gravity := 24.0
@@ -114,6 +116,7 @@ func _setup_actions() -> void:
 	_add("jump", KEY_SPACE)
 	_add("spin", KEY_F)
 	_add("inventory", KEY_TAB)
+	_add("flashlight", KEY_L)
 	for i in range(8):
 		_add("equip%d" % (i + 1), KEY_1 + i)
 
@@ -260,6 +263,10 @@ func _process(delta: float) -> void:
 			hud.message("Патроны: %s" % GameData.AMMO_TYPES[ammo_type]["name"], GameData.AMMO_TYPES[ammo_type]["color"])
 	if Input.is_action_just_pressed(_action("spin")):
 		Net.rpc("spin_request")
+	if Input.is_action_just_pressed(_action("flashlight")):
+		flashlight_on = not flashlight_on
+		if hud != null:
+			hud.message("Фонарик: " + ("вкл" if flashlight_on else "выкл"))
 	if Input.is_action_just_pressed(_action("inventory")) and hud != null and hud.inventory != null:
 		if hud.casino != null and hud.casino.is_open:
 			hud.casino.close()
@@ -366,6 +373,8 @@ func _update_camera() -> void:
 		) * shake_amount * 0.06
 		camera.rotation.x += randf_range(-1.0, 1.0) * shake_amount * 0.025
 	camera.fov = lerpf(camera.fov, 42.0 if (aiming and not third_person) else 75.0, 0.25)
+	if flashlight_light != null:
+		flashlight_light.visible = flashlight_on and GameState.world != null and GameState.world.night_factor > 0.35
 
 func _toggle_camera() -> void:
 	third_person = not third_person
@@ -494,6 +503,15 @@ func _build_viewmodel() -> void:
 	muzzle_flash.omni_range = 8.0
 	muzzle_flash.position = Vector3(0.0, 0.0, -1.0)
 	viewmodel.add_child(muzzle_flash)
+	flashlight_light = SpotLight3D.new()
+	flashlight_light.light_color = Color(1.0, 0.96, 0.82)
+	flashlight_light.light_energy = 4.0
+	flashlight_light.spot_range = 42.0
+	flashlight_light.spot_angle = 26.0
+	flashlight_light.spot_angle_attenuation = 0.7
+	flashlight_light.position = Vector3(0.0, -0.1, 0.0)
+	flashlight_light.visible = false
+	camera.add_child(flashlight_light)
 
 func _rebuild_weapon_model() -> void:
 	if viewmodel == null:
